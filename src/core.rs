@@ -16,7 +16,9 @@ pub fn run_mutation_testing(project_path: &str) -> anyhow::Result<Vec<MutationRe
         .filter(|e| e.path().extension().map_or(false, |ext| ext == "rb"))
         .filter(|e| {
             let path_str = e.path().to_string_lossy();
-            !path_str.contains("/spec/") && !path_str.contains("/test/")
+            !path_str.contains("/spec/")
+                && !path_str.contains("/test/")
+                && !path_str.contains("/vendor/")
         })
         .map(|e| e.path().to_string_lossy().to_string())
         .collect();

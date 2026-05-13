@@ -9,3 +9,4 @@ tree-sitter-ruby = "0.23"
 clap = { version = "4", features = ["derive"] }
 walkdir = "2"
 anyhow = "1"
+tempfile = "3"
