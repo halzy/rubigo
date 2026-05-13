@@ -10,7 +10,9 @@ struct Cli {
     #[arg(short, long, default_value = ".")]
     path: String,
 
-    /// Full shell command to run the test suite
+    /// Full shell command to run the test suite. Use {spec_file} to target the
+    /// spec file for the current mutated source file (e.g., "bundle exec rspec {spec_file}").
+    /// Without this flag, the test framework is auto-detected.
     #[arg(long = "test-cmd", value_name = "CMD")]
     test_cmd: Option<String>,
 

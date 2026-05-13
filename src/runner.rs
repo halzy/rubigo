@@ -17,6 +17,35 @@ pub fn detect_framework(project_path: &str) -> Framework {
     }
 }
 
+/// Derive the spec file path for a source file.
+///
+/// Conventions:
+///   `app/models/user.rb`     → `spec/models/user_spec.rb`
+///   `lib/foo/bar.rb`         → `spec/lib/foo/bar_spec.rb`
+///   `app/controllers/a.rb`   → `spec/controllers/a_spec.rb`
+///
+/// Returns `None` if the derived spec file does not exist on disk.
+pub fn derive_spec_file(source_file: &str, project_path: &str) -> Option<String> {
+    let rel = source_file.strip_prefix(project_path)?.trim_start_matches('/');
+
+    // Strip `app/` prefix if present; keep `lib/` prefix.
+    let spec_rel = if let Some(rest) = rel.strip_prefix("app/") {
+        format!("spec/{}", rest)
+    } else {
+        format!("spec/{}", rel)
+    };
+
+    // Replace .rb suffix with _spec.rb
+    let spec_rel = format!("{}_spec.rb", spec_rel.strip_suffix(".rb")?);
+
+    let full_path = std::path::Path::new(project_path).join(&spec_rel);
+    if full_path.exists() {
+        Some(full_path.to_string_lossy().to_string())
+    } else {
+        None
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub enum TestOutcome {
     Pass,   // tests ran, all passed (mutation survived)
@@ -34,29 +63,47 @@ pub struct TestRun {
 
 /// Run the test suite.
 ///
-/// If `test_cmd` is provided, it is executed verbatim via `sh -c` (supports
-/// env vars, pipes, etc.). Otherwise, the test framework is auto-detected
-/// and the default command is used.
-pub fn run_tests(project_path: &str, test_cmd: Option<&str>) -> anyhow::Result<TestRun> {
+/// If `test_cmd` is provided, it is executed verbatim via `sh -c` after
+/// substituting `{spec_file}` with the optional spec file path. Supports
+/// env vars, pipes, etc.
+///
+/// Otherwise, the test framework is auto-detected and the default command
+/// is used. For RSpec, `spec_file` targets a single spec when available.
+pub fn run_tests(
+    project_path: &str,
+    test_cmd: Option<&str>,
+    spec_file: Option<&str>,
+) -> anyhow::Result<TestRun> {
     let output = if let Some(cmd) = test_cmd {
+        // Template substitution: {spec_file} → spec_file or empty string
+        let cmd = if let Some(spec) = spec_file {
+            cmd.replace("{spec_file}", spec)
+        } else {
+            cmd.replace("{spec_file}", "")
+        };
         Command::new("sh")
-            .args(["-c", cmd])
+            .args(["-c", &cmd])
             .current_dir(project_path)
             .output()?
     } else {
         match detect_framework(project_path) {
-            Framework::RSpec => Command::new("bundle")
-                .args(["exec", "rspec", "--format", "progress"])
-                .current_dir(project_path)
-                .output()?,
-            Framework::Minitest => Command::new("bundle")
-                .args(["exec", "rake", "test"])
-                .current_dir(project_path)
-                .output()?,
+            Framework::RSpec => {
+                let mut cmd = Command::new("bundle");
+                cmd.args(["exec", "rspec", "--format", "progress"]);
+                if let Some(spec) = spec_file {
+                    cmd.arg(spec);
+                }
+                cmd.current_dir(project_path).output()?
+            }
+            Framework::Minitest => {
+                // Minitest has no clean 1:1 file→test mapping, always run full suite
+                Command::new("bundle")
+                    .args(["exec", "rake", "test"])
+                    .current_dir(project_path)
+                    .output()?
+            }
             Framework::Unknown => {
-                anyhow::bail!(
-                    "No test framework detected. Provide --test-cmd."
-                )
+                anyhow::bail!("No test framework detected. Provide --test-cmd.")
             }
         }
     };
@@ -81,6 +128,8 @@ pub fn run_tests(project_path: &str, test_cmd: Option<&str>) -> anyhow::Result<T
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── Framework detection ──────────────────────────────
 
     #[test]
     fn test_detect_rspec_when_spec_dir_exists() {
@@ -114,31 +163,126 @@ mod tests {
         assert!(matches!(detect_framework(path), Framework::Unknown));
     }
 
+    // ── derive_spec_file ─────────────────────────────────
+
+    #[test]
+    fn test_derive_spec_file_app_models() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("spec/models")).unwrap();
+        std::fs::write(dir.path().join("spec/models/user_spec.rb"), "").unwrap();
+        std::fs::create_dir_all(dir.path().join("app/models")).unwrap();
+        std::fs::write(dir.path().join("app/models/user.rb"), "class User; end").unwrap();
+
+        let project_path = dir.path().to_str().unwrap();
+        let source = dir.path().join("app/models/user.rb");
+        let result = derive_spec_file(&source.to_string_lossy(), project_path);
+        assert!(result.is_some());
+        assert!(result.unwrap().ends_with("spec/models/user_spec.rb"));
+    }
+
+    #[test]
+    fn test_derive_spec_file_lib() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("spec/lib/foo")).unwrap();
+        std::fs::write(dir.path().join("spec/lib/foo/bar_spec.rb"), "").unwrap();
+        std::fs::create_dir_all(dir.path().join("lib/foo")).unwrap();
+        std::fs::write(dir.path().join("lib/foo/bar.rb"), "class Bar; end").unwrap();
+
+        let project_path = dir.path().to_str().unwrap();
+        let source = dir.path().join("lib/foo/bar.rb");
+        let result = derive_spec_file(&source.to_string_lossy(), project_path);
+        assert!(result.is_some());
+        assert!(result.unwrap().ends_with("spec/lib/foo/bar_spec.rb"));
+    }
+
+    #[test]
+    fn test_derive_spec_file_nonexistent() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("lib")).unwrap();
+        std::fs::write(dir.path().join("lib/no_spec.rb"), "# no spec file").unwrap();
+
+        let project_path = dir.path().to_str().unwrap();
+        let source = dir.path().join("lib/no_spec.rb");
+        let result = derive_spec_file(&source.to_string_lossy(), project_path);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_derive_spec_file_outside_project() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_path = dir.path().to_str().unwrap();
+        let result = derive_spec_file("/some/other/path/foo.rb", project_path);
+        assert!(result.is_none());
+    }
+
+    // ── run_tests ────────────────────────────────────────
+
     #[test]
     fn test_run_tests_unknown_framework_returns_error() {
         let dir = tempfile::tempdir().unwrap();
-        let result = run_tests(dir.path().to_str().unwrap(), None);
+        let result = run_tests(dir.path().to_str().unwrap(), None, None);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_custom_test_cmd_pass() {
         let dir = tempfile::tempdir().unwrap();
-        let result = run_tests(dir.path().to_str().unwrap(), Some("echo ok && exit 0"));
+        let result = run_tests(dir.path().to_str().unwrap(), Some("echo ok && exit 0"), None);
         assert_eq!(result.unwrap().outcome, TestOutcome::Pass);
     }
 
     #[test]
     fn test_custom_test_cmd_fail() {
         let dir = tempfile::tempdir().unwrap();
-        let result = run_tests(dir.path().to_str().unwrap(), Some("echo fail && exit 1"));
+        let result = run_tests(dir.path().to_str().unwrap(), Some("echo fail && exit 1"), None);
         assert_eq!(result.unwrap().outcome, TestOutcome::Fail);
     }
 
     #[test]
     fn test_custom_test_cmd_error() {
         let dir = tempfile::tempdir().unwrap();
-        let result = run_tests(dir.path().to_str().unwrap(), Some("exit 2"));
+        let result = run_tests(dir.path().to_str().unwrap(), Some("exit 2"), None);
         assert_eq!(result.unwrap().outcome, TestOutcome::Error);
+    }
+
+    #[test]
+    fn test_template_substitution_with_spec_file() {
+        let dir = tempfile::tempdir().unwrap();
+        // Command echoes the spec file path; exit 1 to simulate test failure
+        let result = run_tests(
+            dir.path().to_str().unwrap(),
+            Some("echo {spec_file} && exit 1"),
+            Some("spec/models/user_spec.rb"),
+        );
+        let run = result.unwrap();
+        assert_eq!(run.outcome, TestOutcome::Fail);
+        assert!(run.stdout.contains("spec/models/user_spec.rb"));
+    }
+
+    #[test]
+    fn test_template_substitution_without_spec_file() {
+        let dir = tempfile::tempdir().unwrap();
+        // {spec_file} should be replaced with empty string
+        let result = run_tests(
+            dir.path().to_str().unwrap(),
+            Some("echo [{spec_file}] && exit 0"),
+            None,
+        );
+        let run = result.unwrap();
+        assert_eq!(run.outcome, TestOutcome::Pass);
+        assert!(run.stdout.contains("[]"));
+    }
+
+    #[test]
+    fn test_template_no_placeholder_passes_through() {
+        let dir = tempfile::tempdir().unwrap();
+        let result = run_tests(
+            dir.path().to_str().unwrap(),
+            Some("echo hello && exit 0"),
+            Some("spec/something_spec.rb"),
+        );
+        let run = result.unwrap();
+        assert_eq!(run.outcome, TestOutcome::Pass);
+        assert!(run.stdout.contains("hello"));
     }
 }

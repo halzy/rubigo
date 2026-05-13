@@ -200,7 +200,7 @@ pub fn run_mutation_testing(cfg: &Config) -> anyhow::Result<Vec<MutationResult>>
     // Step 3: Baseline
     println!("Running baseline test suite...");
     let baseline_start = Instant::now();
-    let baseline = runner::run_tests(project_path, cfg.test_cmd)?;
+    let baseline = runner::run_tests(project_path, cfg.test_cmd, None)?;
     let baseline_duration = baseline_start.elapsed();
 
     if cfg.verbosity.show_always() {
@@ -237,8 +237,10 @@ pub fn run_mutation_testing(cfg: &Config) -> anyhow::Result<Vec<MutationResult>>
 
         let mut guard = FileGuard::overwrite(std::path::Path::new(&point.file), &mutated)?;
 
+        let spec_file = runner::derive_spec_file(&point.file, project_path);
+        let spec_file_str = spec_file.as_deref();
         let test_run =
-            runner::run_tests(project_path, cfg.test_cmd).unwrap_or_else(|_| TestRun {
+            runner::run_tests(project_path, cfg.test_cmd, spec_file_str).unwrap_or_else(|_| TestRun {
                 outcome: runner::TestOutcome::Error,
                 stdout: String::new(),
                 stderr: "run_tests failed".into(),
