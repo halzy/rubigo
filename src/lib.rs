@@ -4,6 +4,7 @@ pub mod core;
 pub mod emit;
 pub mod io;
 pub mod mutation;
+pub mod operator;
 pub mod parser;
 pub mod report;
 pub mod runner;

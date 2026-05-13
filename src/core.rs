@@ -64,7 +64,8 @@ pub fn run_mutation_testing(cfg: &Config) -> anyhow::Result<Vec<MutationResult>>
         anyhow::bail!("No .rb source files found in {}", project_path);
     }
 
-    // Step 2: Parse once, collect mutations, keep trees alive
+    // Step 2: Parse once, collect mutations. Only keep trees for files
+    // that have mutation points (avoid holding CSTs for 593 files in memory).
     let mut file_trees: std::collections::HashMap<String, FileTree> =
         std::collections::HashMap::new();
     let mut all_points: Vec<MutationPoint> = Vec::new();
@@ -72,9 +73,11 @@ pub fn run_mutation_testing(cfg: &Config) -> anyhow::Result<Vec<MutationResult>>
     for file in &rb_files {
         let source = std::fs::read_to_string(file)?;
         let tree = parser::parse_source(&source)?;
-        let points = parser::find_eq_mutations(&tree, &source, file);
+        let points = parser::find_mutations(&tree, &source, file);
+        if !points.is_empty() {
+            file_trees.insert(file.clone(), FileTree { source, tree });
+        }
         all_points.extend(points);
-        file_trees.insert(file.clone(), FileTree { source, tree });
     }
 
     println!(
