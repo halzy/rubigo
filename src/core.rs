@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use crate::mutator::MutationPoint;
 use crate::parser;
 use crate::runner::{self, TestOutcome};
@@ -72,30 +74,31 @@ pub fn run_mutation_testing(
         return Ok(vec![]);
     }
 
-    // Step 3: Run baseline test suite first to ensure it works
+    // Step 3: Run baseline test suite first to time it and ensure it works
     println!("Running baseline test suite...");
+    let baseline_start = Instant::now();
     let baseline = runner::run_tests(project_path, rspec_args)?;
+    let baseline_duration = baseline_start.elapsed();
+
     if baseline == TestOutcome::Error {
-        eprintln!("WARNING: Baseline test suite could not run — all mutations will report as errors.\n");
+        eprintln!(
+            "WARNING: Baseline test suite could not run — all mutations will report as errors.\n"
+        );
+    } else {
+        let total_est = baseline_duration * all_points.len() as u32;
+        println!(
+            "Baseline: {:?} per run ~ est. total: ~{:?} for {} mutations\n",
+            baseline_duration, total_est, all_points.len()
+        );
     }
 
     // Step 4: Test each mutation one at a time
     let mut results = Vec::new();
     let total = all_points.len();
     let mut errors = 0usize;
+    let start_time = Instant::now();
 
     for (i, point) in all_points.iter().enumerate() {
-        println!(
-            "[{}/{}] Testing {} ({} -> {}) at bytes {}-{}",
-            i + 1,
-            total,
-            point.file,
-            point.original,
-            point.replacement,
-            point.start_byte,
-            point.end_byte
-        );
-
         // Read, mutate, write in-place, test, restore
         let original = std::fs::read_to_string(&point.file)?;
         let mutated = crate::mutator::apply_mutation(&original, point);
@@ -114,6 +117,31 @@ pub fn run_mutation_testing(
                 MutationOutcome::Error
             }
         };
+
+        // ETA calculation
+        let elapsed = start_time.elapsed();
+        let done = i + 1;
+        let remaining = total - done;
+        let avg_per = elapsed / done as u32;
+        let eta = avg_per * remaining as u32;
+
+        let outcome_str = match mutation_outcome {
+            MutationOutcome::Killed => "KILLED",
+            MutationOutcome::Survived => "SURVIVED",
+            MutationOutcome::Error => "ERROR",
+        };
+
+        println!(
+            "[{}/{}] {}:{}  {} -> {}  [{}]  est. remaining: ~{:?}",
+            done,
+            total,
+            point.file,
+            point.line_number,
+            point.original,
+            point.replacement,
+            outcome_str,
+            eta,
+        );
 
         results.push(MutationResult {
             point: point.clone(),
@@ -135,9 +163,17 @@ pub fn run_mutation_testing(
 mod tests {
     use super::*;
 
-    fn make_point(file: &str, start: usize, end: usize, original: &str, replacement: &str) -> MutationPoint {
+    fn make_point(
+        file: &str,
+        line: usize,
+        start: usize,
+        end: usize,
+        original: &str,
+        replacement: &str,
+    ) -> MutationPoint {
         MutationPoint {
             file: file.to_string(),
+            line_number: line,
             start_byte: start,
             end_byte: end,
             original: original.to_string(),
@@ -150,7 +186,7 @@ mod tests {
     #[test]
     fn test_killed_returns_true_for_killed() {
         let r = MutationResult {
-            point: make_point("a.rb", 0, 2, "==", "!="),
+            point: make_point("a.rb", 1, 0, 2, "==", "!="),
             outcome: MutationOutcome::Killed,
         };
         assert!(r.killed());
@@ -161,7 +197,7 @@ mod tests {
     #[test]
     fn test_survived_returns_true_for_survived() {
         let r = MutationResult {
-            point: make_point("a.rb", 0, 2, "==", "!="),
+            point: make_point("a.rb", 1, 0, 2, "==", "!="),
             outcome: MutationOutcome::Survived,
         };
         assert!(!r.killed());
@@ -172,7 +208,7 @@ mod tests {
     #[test]
     fn test_errored_returns_true_for_error() {
         let r = MutationResult {
-            point: make_point("a.rb", 0, 2, "==", "!="),
+            point: make_point("a.rb", 1, 0, 2, "==", "!="),
             outcome: MutationOutcome::Error,
         };
         assert!(!r.killed());
@@ -182,50 +218,51 @@ mod tests {
 
     #[test]
     fn test_mutation_outcomes_are_mutually_exclusive() {
-        let killed   = MutationResult { point: make_point("a.rb", 0, 2, "==", "!="), outcome: MutationOutcome::Killed };
-        let survived = MutationResult { point: make_point("b.rb", 0, 2, "!=", "=="), outcome: MutationOutcome::Survived };
-        let errored  = MutationResult { point: make_point("c.rb", 0, 2, "==", "!="), outcome: MutationOutcome::Error };
+        let killed = MutationResult {
+            point: make_point("a.rb", 1, 0, 2, "==", "!="),
+            outcome: MutationOutcome::Killed,
+        };
+        let survived = MutationResult {
+            point: make_point("b.rb", 1, 0, 2, "!=", "=="),
+            outcome: MutationOutcome::Survived,
+        };
+        let errored = MutationResult {
+            point: make_point("c.rb", 1, 0, 2, "==", "!="),
+            outcome: MutationOutcome::Error,
+        };
 
-        // Killed: only killed() is true
         assert!(killed.killed() && !killed.survived() && !killed.errored());
-        // Survived: only survived() is true
         assert!(!survived.killed() && survived.survived() && !survived.errored());
-        // Error: only errored() is true
         assert!(!errored.killed() && !errored.survived() && errored.errored());
     }
 
-    // ── Outcome enum equality ──────────────────────────────
-
     #[test]
     fn test_mutation_outcome_equality() {
-        assert_eq!(MutationOutcome::Killed,   MutationOutcome::Killed);
+        assert_eq!(MutationOutcome::Killed, MutationOutcome::Killed);
         assert_eq!(MutationOutcome::Survived, MutationOutcome::Survived);
-        assert_eq!(MutationOutcome::Error,    MutationOutcome::Error);
-        assert_ne!(MutationOutcome::Killed,   MutationOutcome::Survived);
-        assert_ne!(MutationOutcome::Killed,   MutationOutcome::Error);
+        assert_eq!(MutationOutcome::Error, MutationOutcome::Error);
+        assert_ne!(MutationOutcome::Killed, MutationOutcome::Survived);
+        assert_ne!(MutationOutcome::Killed, MutationOutcome::Error);
         assert_ne!(MutationOutcome::Survived, MutationOutcome::Error);
     }
-
-    // ── File filtering logic ───────────────────────────────
 
     #[test]
     fn test_run_mutation_testing_rejects_non_ruby_projects() {
         let dir = tempfile::tempdir().unwrap();
         let result = run_mutation_testing(dir.path().to_str().unwrap(), &[]);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("No .rb source files"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("No .rb source files"));
     }
 
     #[test]
     fn test_run_mutation_testing_empty_project_no_mutations() {
-        // Create a dir with spec/ and a tiny .rb file with no operators
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("spec")).unwrap();
         std::fs::create_dir_all(dir.path().join("lib")).unwrap();
         std::fs::write(dir.path().join("lib").join("foo.rb"), "# nothing\n").unwrap();
-        // This will try to run bundle exec rspec and fail because there's no Gemfile,
-        // but the file discovery/mutation-point stage should still work.
-        // We just verify it doesn't panic on empty results.
         let _ = run_mutation_testing(dir.path().to_str().unwrap(), &[]);
     }
 }

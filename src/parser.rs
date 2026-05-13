@@ -1,6 +1,6 @@
 use tree_sitter::{Node, Tree};
 
-use crate::mutator::MutationPoint;
+use crate::mutator::{self, MutationPoint};
 
 pub fn parse_source(source: &str) -> anyhow::Result<Tree> {
     let mut parser = tree_sitter::Parser::new();
@@ -12,7 +12,7 @@ pub fn parse_source(source: &str) -> anyhow::Result<Tree> {
 }
 
 /// Find all `==` and `!=` operator nodes in the tree,
-/// returning their byte ranges for mutation.
+/// returning their byte ranges and line numbers for mutation.
 pub fn find_eq_mutations(tree: &Tree, source: &str, file: &str) -> Vec<MutationPoint> {
     let mut points = Vec::new();
     walk_node(tree.root_node(), source, file, &mut points);
@@ -26,11 +26,14 @@ fn walk_node(node: Node, source: &str, file: &str, points: &mut Vec<MutationPoin
         for i in 0..node.child_count() {
             let child = node.child(i as u32).unwrap();
             if child.kind() == "==" || child.kind() == "!=" {
-                let original = &source[child.start_byte()..child.end_byte()];
+                let start_byte = child.start_byte();
+                let original = &source[start_byte..child.end_byte()];
                 let replacement = if original == "==" { "!=" } else { "==" };
+                let line_number = mutator::byte_to_line(source, start_byte);
                 points.push(MutationPoint {
                     file: file.to_string(),
-                    start_byte: child.start_byte(),
+                    line_number,
+                    start_byte,
                     end_byte: child.end_byte(),
                     original: original.to_string(),
                     replacement: replacement.to_string(),
@@ -66,6 +69,7 @@ mod tests {
         assert_eq!(points.len(), 1, "should find one == operator");
         assert_eq!(points[0].original, "==");
         assert_eq!(points[0].replacement, "!=");
+        assert_eq!(points[0].line_number, 1, "== is on line 1");
     }
 
     #[test]
@@ -84,6 +88,8 @@ mod tests {
         let tree = parse_source(source).unwrap();
         let points = find_eq_mutations(&tree, source, "test.rb");
         assert_eq!(points.len(), 2, "should find both == and !=");
+        assert_eq!(points[0].line_number, 2);
+        assert_eq!(points[1].line_number, 2);
     }
 
     #[test]
@@ -92,5 +98,14 @@ mod tests {
         let tree = parse_source(source).unwrap();
         let points = find_eq_mutations(&tree, source, "test.rb");
         assert_eq!(points.len(), 0, "should find no mutation points");
+    }
+
+    #[test]
+    fn test_line_number_multiline() {
+        let source = "class Foo\n  def bar(a, b)\n    a == b\n  end\nend\n";
+        let tree = parse_source(source).unwrap();
+        let points = find_eq_mutations(&tree, source, "test.rb");
+        assert_eq!(points.len(), 1);
+        assert_eq!(points[0].line_number, 3);
     }
 }
