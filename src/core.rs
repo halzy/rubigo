@@ -107,12 +107,40 @@ struct FileTree {
 
 // ── Main entry point ────────────────────────────────────
 
+/// When `path` is a file, walk up to find the project root (directory containing
+/// Gemfile, .git, or spec/). Returns the original path unchanged if it's already
+/// a directory or no project root is found.
+fn find_project_root(path: &str) -> &str {
+    let p = std::path::Path::new(path);
+    if p.is_dir() {
+        return path;
+    }
+    let mut current = p.parent();
+    while let Some(dir) = current {
+        if dir.join("Gemfile").exists()
+            || dir.join("spec").is_dir()
+            || dir.join(".git").exists()
+        {
+            // Return as &str — the parent is a prefix of the original path, so the
+            // borrow is valid.
+            return dir.to_str().unwrap_or(path);
+        }
+        current = dir.parent();
+    }
+    path // fallback: use as-is
+}
+
 /// Run mutation testing on a Ruby project using the given config.
 pub fn run_mutation_testing(cfg: &Config) -> anyhow::Result<Vec<MutationResult>> {
     install_ctrlc_handler();
     INTERRUPT_STATE.store(0, Ordering::SeqCst);
 
     let project_path = cfg.project_path;
+
+    // When the user passes a single file (e.g. `-p app/models/user.rb`),
+    // we still need the project root for cwd and spec derivation.
+    // find_project_root walks up from the file to find Gemfile/spec/.git.
+    let project_root = find_project_root(project_path);
 
     // Step 1: Find Ruby source files
     let rb_files: Vec<String> = walkdir::WalkDir::new(project_path)
@@ -241,7 +269,7 @@ pub fn run_mutation_testing(cfg: &Config) -> anyhow::Result<Vec<MutationResult>>
     // Step 3: Baseline
     println!("Running baseline test suite...");
     let baseline_start = Instant::now();
-    let baseline = runner::run_tests(project_path, cfg.test_cmd, None)?;
+    let baseline = runner::run_tests(project_root, cfg.test_cmd, None)?;
     let baseline_duration = baseline_start.elapsed();
 
     if cfg.verbosity.show_always() {
@@ -278,10 +306,10 @@ pub fn run_mutation_testing(cfg: &Config) -> anyhow::Result<Vec<MutationResult>>
 
         let mut guard = FileGuard::overwrite(std::path::Path::new(&point.file), &mutated)?;
 
-        let spec_file = runner::derive_spec_file(&point.file, project_path);
+        let spec_file = runner::derive_spec_file(&point.file, project_root);
         let spec_file_str = spec_file.as_deref();
         let test_run =
-            runner::run_tests(project_path, cfg.test_cmd, spec_file_str).unwrap_or_else(|_| TestRun {
+            runner::run_tests(project_root, cfg.test_cmd, spec_file_str).unwrap_or_else(|_| TestRun {
                 outcome: runner::TestOutcome::Error,
                 stdout: String::new(),
                 stderr: "run_tests failed".into(),
