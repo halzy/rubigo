@@ -35,6 +35,7 @@ impl MutationResult {
 pub fn run_mutation_testing(
     project_path: &str,
     rspec_args: &[String],
+    limit: Option<usize>,
 ) -> anyhow::Result<Vec<MutationResult>> {
     // Step 1: Find all Ruby source files (exclude spec/, test/, vendor/ dirs)
     let rb_files: Vec<String> = walkdir::WalkDir::new(project_path)
@@ -72,6 +73,14 @@ pub fn run_mutation_testing(
     if all_points.is_empty() {
         println!("Nothing to mutate. Exiting.");
         return Ok(vec![]);
+    }
+
+    // Apply mutation limit if set
+    if let Some(n) = limit {
+        if n < all_points.len() {
+            all_points.truncate(n);
+            println!("Limited to first {} mutation(s)\n", n);
+        }
     }
 
     // Step 3: Run baseline test suite first to time it and ensure it works
@@ -249,7 +258,7 @@ mod tests {
     #[test]
     fn test_run_mutation_testing_rejects_non_ruby_projects() {
         let dir = tempfile::tempdir().unwrap();
-        let result = run_mutation_testing(dir.path().to_str().unwrap(), &[]);
+        let result = run_mutation_testing(dir.path().to_str().unwrap(), &[], None);
         assert!(result.is_err());
         assert!(result
             .unwrap_err()
@@ -263,6 +272,6 @@ mod tests {
         std::fs::create_dir_all(dir.path().join("spec")).unwrap();
         std::fs::create_dir_all(dir.path().join("lib")).unwrap();
         std::fs::write(dir.path().join("lib").join("foo.rb"), "# nothing\n").unwrap();
-        let _ = run_mutation_testing(dir.path().to_str().unwrap(), &[]);
+        let _ = run_mutation_testing(dir.path().to_str().unwrap(), &[], None);
     }
 }
