@@ -1,6 +1,9 @@
 pub mod cache;
+pub mod config;
 pub mod core;
-pub mod mutator;
+pub mod emit;
+pub mod io;
+pub mod mutation;
 pub mod parser;
 pub mod report;
 pub mod runner;

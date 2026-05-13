@@ -12,7 +12,7 @@ pub struct MutationId {
 }
 
 impl MutationId {
-    pub fn from_point(point: &crate::mutator::MutationPoint) -> Self {
+    pub fn from_point(point: &crate::mutation::MutationPoint) -> Self {
         MutationId {
             file: point.file.clone(),
             line_number: point.line_number,

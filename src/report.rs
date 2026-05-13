@@ -1,13 +1,12 @@
 use crate::core::MutationResult;
 
-pub fn print_report(
-    killed: usize,
-    survived: usize,
-    errors: usize,
-    skipped: usize,
-    total: usize,
-    results: &[MutationResult],
-) {
+pub fn print_report(results: &[MutationResult]) {
+    let killed = results.iter().filter(|r| r.killed()).count();
+    let survived = results.iter().filter(|r| r.survived()).count();
+    let errors = results.iter().filter(|r| r.errored()).count();
+    let skipped = results.iter().filter(|r| r.skipped()).count();
+    let total = results.len();
+
     println!();
     println!("═══════════════════════════════════");
     println!("  Rubigo — Mutation Testing Report  ");
@@ -79,104 +78,77 @@ pub fn print_report(
 
 #[cfg(test)]
 mod tests {
-    use crate::core::{MutationOutcome, MutationResult};
-    use crate::mutator::MutationPoint;
+    use crate::core::MutationResult;
+    use crate::core::MutationOutcome;
+    use crate::mutation::MutationPoint;
 
-    fn mp(
-        file: &str,
-        line: usize,
-        start: usize,
-        end: usize,
-        orig: &str,
-        repl: &str,
-    ) -> MutationPoint {
+    fn mp(file: &str, line: usize, orig: &str, repl: &str) -> MutationPoint {
         MutationPoint {
             file: file.to_string(),
             line_number: line,
-            start_byte: start,
-            end_byte: end,
+            node_id: 0,
             original: orig.to_string(),
             replacement: repl.to_string(),
         }
     }
 
-    fn mr(
-        file: &str,
-        line: usize,
-        start: usize,
-        end: usize,
-        orig: &str,
-        repl: &str,
-        outcome: MutationOutcome,
-    ) -> MutationResult {
+    fn mr(file: &str, line: usize, orig: &str, repl: &str, outcome: MutationOutcome) -> MutationResult {
         MutationResult {
-            point: mp(file, line, start, end, orig, repl),
+            point: mp(file, line, orig, repl),
             outcome,
         }
     }
 
     #[test]
-    fn test_score_zero_killed_zero_testable() {
-        let results: Vec<MutationResult> = vec![];
-        super::print_report(0, 0, 0, 0, 0, &results);
+    fn test_empty() {
+        super::print_report(&[]);
     }
 
     #[test]
-    fn test_score_all_killed_is_100_percent() {
+    fn test_all_killed() {
         let results = vec![
-            mr("a.rb", 3, 0, 2, "==", "!=", MutationOutcome::Killed),
-            mr("a.rb", 7, 5, 7, "!=", "==", MutationOutcome::Killed),
+            mr("a.rb", 3, "==", "!=", MutationOutcome::Killed),
+            mr("a.rb", 7, "!=", "==", MutationOutcome::Killed),
         ];
-        super::print_report(2, 0, 0, 0, 2, &results);
+        super::print_report(&results);
     }
 
     #[test]
-    fn test_score_half_killed_is_50_percent() {
+    fn test_half_killed() {
         let results = vec![
-            mr("a.rb", 1, 0, 2, "==", "!=", MutationOutcome::Killed),
-            mr("b.rb", 2, 0, 2, "!=", "==", MutationOutcome::Survived),
+            mr("a.rb", 1, "==", "!=", MutationOutcome::Killed),
+            mr("b.rb", 2, "!=", "==", MutationOutcome::Survived),
         ];
-        super::print_report(1, 1, 0, 0, 2, &results);
+        super::print_report(&results);
     }
 
     #[test]
-    fn test_score_with_errors_excludes_them_from_testable() {
+    fn test_with_errors() {
         let results = vec![
-            mr("a.rb", 1, 0, 2, "==", "!=", MutationOutcome::Killed),
-            mr("b.rb", 1, 0, 2, "==", "!=", MutationOutcome::Killed),
-            mr("c.rb", 1, 0, 2, "!=", "==", MutationOutcome::Survived),
-            mr("d.rb", 1, 0, 2, "==", "!=", MutationOutcome::Error),
+            mr("a.rb", 1, "==", "!=", MutationOutcome::Killed),
+            mr("b.rb", 1, "==", "!=", MutationOutcome::Killed),
+            mr("c.rb", 1, "!=", "==", MutationOutcome::Survived),
+            mr("d.rb", 1, "==", "!=", MutationOutcome::Error),
         ];
-        super::print_report(2, 1, 1, 0, 4, &results);
+        super::print_report(&results);
     }
 
     #[test]
-    fn test_report_with_skipped_mutations() {
+    fn test_with_skipped() {
         let results = vec![
-            mr("a.rb", 1, 0, 2, "==", "!=", MutationOutcome::Killed),
-            mr("b.rb", 2, 0, 2, "!=", "==", MutationOutcome::Skipped),
-            mr("c.rb", 3, 0, 2, "==", "!=", MutationOutcome::Skipped),
+            mr("a.rb", 1, "==", "!=", MutationOutcome::Killed),
+            mr("b.rb", 2, "!=", "==", MutationOutcome::Skipped),
+            mr("c.rb", 3, "==", "!=", MutationOutcome::Skipped),
         ];
-        super::print_report(1, 0, 0, 2, 3, &results);
+        super::print_report(&results);
     }
 
     #[test]
-    fn test_no_panic_on_empty_results() {
-        super::print_report(0, 0, 0, 0, 0, &[]);
-    }
-
-    #[test]
-    fn test_excellent_coverage_message_when_all_killed() {
-        let results = vec![mr("a.rb", 2, 0, 2, "==", "!=", MutationOutcome::Killed)];
-        super::print_report(1, 0, 0, 0, 1, &results);
-    }
-
-    #[test]
-    fn test_no_excellent_coverage_message_when_errors_exist() {
+    fn test_excellent_with_cache() {
         let results = vec![
-            mr("a.rb", 5, 0, 2, "==", "!=", MutationOutcome::Killed),
-            mr("b.rb", 9, 0, 2, "!=", "==", MutationOutcome::Error),
+            mr("a.rb", 5, "==", "!=", MutationOutcome::Killed),
+            mr("b.rb", 9, "!=", "==", MutationOutcome::Skipped),
         ];
-        super::print_report(1, 0, 1, 0, 2, &results);
+        super::print_report(&results);
     }
 }
