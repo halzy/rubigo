@@ -139,9 +139,14 @@ pub fn run_mutation_testing(cfg: &Config) -> anyhow::Result<Vec<MutationResult>>
     // Step 2.5: List-only mode — print and exit before mutating anything
     if cfg.list_only {
         for point in &all_points {
+            let source_line = file_trees
+                .get(&point.file)
+                .and_then(|ft| ft.source.lines().nth(point.line_number.saturating_sub(1)))
+                .unwrap_or("");
             println!(
-                "{}:{}  {} -> {}  [{}]",
-                point.file, point.line_number, point.original, point.replacement, point.operator_name,
+                "{}:{}  {} -> {}  [{}]  |{}",
+                point.file, point.line_number, point.original,
+                point.replacement, point.operator_name, source_line,
             );
         }
         println!("\n{} mutation point(s) found.", all_points.len());
