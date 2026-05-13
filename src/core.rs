@@ -2,13 +2,14 @@ use crate::mutator::MutationPoint;
 use crate::parser;
 use crate::runner::{self, TestOutcome};
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum MutationOutcome {
-    Killed,     // tests ran and caught the mutation
-    Survived,   // tests ran but didn't catch it
-    Error,      // tests could not run (infrastructure, etc.)
+    Killed,   // tests ran and caught the mutation
+    Survived, // tests ran but didn't catch it
+    Error,    // tests could not run (infrastructure, etc.)
 }
 
+#[derive(Debug)]
 pub struct MutationResult {
     pub point: MutationPoint,
     pub outcome: MutationOutcome,
@@ -128,4 +129,103 @@ pub fn run_mutation_testing(
     }
 
     Ok(results)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_point(file: &str, start: usize, end: usize, original: &str, replacement: &str) -> MutationPoint {
+        MutationPoint {
+            file: file.to_string(),
+            start_byte: start,
+            end_byte: end,
+            original: original.to_string(),
+            replacement: replacement.to_string(),
+        }
+    }
+
+    // ── MutationResult helpers ─────────────────────────────
+
+    #[test]
+    fn test_killed_returns_true_for_killed() {
+        let r = MutationResult {
+            point: make_point("a.rb", 0, 2, "==", "!="),
+            outcome: MutationOutcome::Killed,
+        };
+        assert!(r.killed());
+        assert!(!r.survived());
+        assert!(!r.errored());
+    }
+
+    #[test]
+    fn test_survived_returns_true_for_survived() {
+        let r = MutationResult {
+            point: make_point("a.rb", 0, 2, "==", "!="),
+            outcome: MutationOutcome::Survived,
+        };
+        assert!(!r.killed());
+        assert!(r.survived());
+        assert!(!r.errored());
+    }
+
+    #[test]
+    fn test_errored_returns_true_for_error() {
+        let r = MutationResult {
+            point: make_point("a.rb", 0, 2, "==", "!="),
+            outcome: MutationOutcome::Error,
+        };
+        assert!(!r.killed());
+        assert!(!r.survived());
+        assert!(r.errored());
+    }
+
+    #[test]
+    fn test_mutation_outcomes_are_mutually_exclusive() {
+        let killed   = MutationResult { point: make_point("a.rb", 0, 2, "==", "!="), outcome: MutationOutcome::Killed };
+        let survived = MutationResult { point: make_point("b.rb", 0, 2, "!=", "=="), outcome: MutationOutcome::Survived };
+        let errored  = MutationResult { point: make_point("c.rb", 0, 2, "==", "!="), outcome: MutationOutcome::Error };
+
+        // Killed: only killed() is true
+        assert!(killed.killed() && !killed.survived() && !killed.errored());
+        // Survived: only survived() is true
+        assert!(!survived.killed() && survived.survived() && !survived.errored());
+        // Error: only errored() is true
+        assert!(!errored.killed() && !errored.survived() && errored.errored());
+    }
+
+    // ── Outcome enum equality ──────────────────────────────
+
+    #[test]
+    fn test_mutation_outcome_equality() {
+        assert_eq!(MutationOutcome::Killed,   MutationOutcome::Killed);
+        assert_eq!(MutationOutcome::Survived, MutationOutcome::Survived);
+        assert_eq!(MutationOutcome::Error,    MutationOutcome::Error);
+        assert_ne!(MutationOutcome::Killed,   MutationOutcome::Survived);
+        assert_ne!(MutationOutcome::Killed,   MutationOutcome::Error);
+        assert_ne!(MutationOutcome::Survived, MutationOutcome::Error);
+    }
+
+    // ── File filtering logic ───────────────────────────────
+
+    #[test]
+    fn test_run_mutation_testing_rejects_non_ruby_projects() {
+        let dir = tempfile::tempdir().unwrap();
+        let result = run_mutation_testing(dir.path().to_str().unwrap(), &[]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("No .rb source files"));
+    }
+
+    #[test]
+    fn test_run_mutation_testing_empty_project_no_mutations() {
+        // Create a dir with spec/ and a tiny .rb file with no operators
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("spec")).unwrap();
+        std::fs::create_dir_all(dir.path().join("lib")).unwrap();
+        std::fs::write(dir.path().join("lib").join("foo.rb"), "# nothing\n").unwrap();
+        // This will try to run bundle exec rspec and fail because there's no Gemfile,
+        // but the file discovery/mutation-point stage should still work.
+        // We just verify it doesn't panic on empty results.
+        let _ = run_mutation_testing(dir.path().to_str().unwrap(), &[]);
+    }
 }
