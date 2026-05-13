@@ -504,4 +504,90 @@ mod tests {
         assert!(!results.is_empty());
         assert!(results.iter().all(|r| r.skipped()));
     }
+
+    #[test]
+    fn test_derive_spec_file_returns_none_when_no_spec() {
+        // When a source file has no corresponding _spec.rb, derive_spec_file
+        // returns None, and run_tests should fall back to full suite.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("spec")).unwrap();
+        std::fs::create_dir_all(dir.path().join("lib")).unwrap();
+        // Create source but NO spec file
+        std::fs::write(
+            dir.path().join("lib").join("foo.rb"),
+            "class Foo\n  def bar(a, b)\n    a == b\n  end\nend\n",
+        )
+        .unwrap();
+
+        let project_path = dir.path().to_str().unwrap().to_string();
+        let source_path = dir
+            .path()
+            .join("lib/foo.rb")
+            .to_string_lossy()
+            .to_string();
+
+        let result = runner::derive_spec_file(&source_path, &project_path);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_derive_spec_file_returns_some_when_spec_exists() {
+        // When the spec file exists, derive_spec_file returns it.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("spec/lib")).unwrap();
+        std::fs::create_dir_all(dir.path().join("lib")).unwrap();
+        // Create source AND spec file
+        std::fs::write(
+            dir.path().join("lib").join("foo.rb"),
+            "class Foo\n  def bar(a, b)\n    a == b\n  end\nend\n",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("spec/lib/foo_spec.rb"), "").unwrap();
+
+        let project_path = dir.path().to_str().unwrap().to_string();
+        let source_path = dir
+            .path()
+            .join("lib/foo.rb")
+            .to_string_lossy()
+            .to_string();
+
+        let result = runner::derive_spec_file(&source_path, &project_path);
+        assert!(result.is_some());
+        assert!(result.unwrap().ends_with("spec/lib/foo_spec.rb"));
+    }
+
+    #[test]
+    fn test_targeted_spec_mutation_with_test_cmd() {
+        // Run with a test-cmd using {spec_file} template against a project
+        // that has both source and spec.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("spec/lib")).unwrap();
+        std::fs::create_dir_all(dir.path().join("lib")).unwrap();
+        std::fs::write(
+            dir.path().join("lib").join("foo.rb"),
+            "class Foo\n  def bar(a, b)\n    a == b\n  end\nend\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("spec").join("lib").join("foo_spec.rb"),
+            // spec always fails -> mutation appears killed
+            "exit 1",
+        )
+        .unwrap();
+
+        let cfg = Config {
+            project_path: dir.path().to_str().unwrap(),
+            test_cmd: Some("ruby {spec_file}"),
+            cache_path: None,
+            limit: Some(1),
+            list_only: false,
+            verbosity: Verbosity::Quiet,
+        };
+
+        let results = run_mutation_testing(&cfg).unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(results[0].killed());
+        assert_eq!(results[0].point.original, "==");
+        assert_eq!(results[0].point.replacement, "!=");
+    }
 }
