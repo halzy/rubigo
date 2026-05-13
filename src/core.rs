@@ -144,10 +144,11 @@ pub fn run_mutation_testing(cfg: &Config) -> anyhow::Result<Vec<MutationResult>>
                 .and_then(|ft| ft.source.lines().nth(point.line_number.saturating_sub(1)))
                 .unwrap_or("");
             println!(
-                "{}:{}  {} -> {}  [{}]  |{}",
+                "{}:{}  {} -> {}  [{}]",
                 point.file, point.line_number, point.original,
-                point.replacement, point.operator_name, source_line,
+                point.replacement, point.operator_name,
             );
+            println!("  {}", source_line);
         }
         println!("\n{} mutation point(s) found.", all_points.len());
         return Ok(vec![]);
