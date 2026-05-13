@@ -8,38 +8,33 @@ struct Cli {
     #[arg(short, long, default_value = ".")]
     path: String,
 
-    /// Extra arguments passed to rspec (e.g., --tag ~integration --tag ~db)
-    #[arg(long = "rspec-arg", value_name = "ARG")]
-    rspec_args: Vec<String>,
-
-    /// Limit to the first N mutations (useful for quick checks)
-    #[arg(short = 'n', long = "limit", value_name = "N")]
-    limit: Option<usize>,
-
-    /// Increase verbosity (-v: show rspec output on SURVIVED/ERROR, -vv: always show)
-    #[arg(short = 'v', long = "verbose", action = clap::ArgAction::Count)]
-    verbosity: u8,
-
-    /// Cache file for previously killed mutations (skip them on re-runs)
-    #[arg(long = "cache", value_name = "FILE")]
-    cache: Option<String>,
-
     /// Full shell command to run the test suite. Supports env vars, pipes, etc.
     /// If not provided, auto-detects RSpec or Minitest.
     /// Example: DATABASE_URL=... bundle exec rspec --tag ~db
     #[arg(long = "test-cmd", value_name = "CMD")]
     test_cmd: Option<String>,
+
+    /// Cache file for previously killed mutations (skip them on re-runs)
+    #[arg(long = "cache", value_name = "FILE")]
+    cache: Option<String>,
+
+    /// Limit to the first N mutations (useful for quick checks)
+    #[arg(short = 'n', long = "limit", value_name = "N")]
+    limit: Option<usize>,
+
+    /// Increase verbosity (-v: show output on SURVIVED/ERROR, -vv: always show)
+    #[arg(short = 'v', long = "verbose", action = clap::ArgAction::Count)]
+    verbosity: u8,
 }
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let results = rubigo::core::run_mutation_testing(
         &cli.path,
-        &cli.rspec_args,
+        cli.test_cmd.as_deref(),
+        cli.cache.as_deref(),
         cli.limit,
         cli.verbosity,
-        cli.cache.as_deref(),
-        cli.test_cmd.as_deref(),
     )?;
 
     let killed = results.iter().filter(|r| r.killed()).count();

@@ -1,4 +1,3 @@
-use std::path::Path;
 use std::process::Command;
 
 pub enum Framework {
@@ -8,7 +7,7 @@ pub enum Framework {
 }
 
 pub fn detect_framework(project_path: &str) -> Framework {
-    let path = Path::new(project_path);
+    let path = std::path::Path::new(project_path);
     if path.join("spec").is_dir() {
         Framework::RSpec
     } else if path.join("test").is_dir() {
@@ -37,37 +36,27 @@ pub struct TestRun {
 ///
 /// If `test_cmd` is provided, it is executed verbatim via `sh -c` (supports
 /// env vars, pipes, etc.). Otherwise, the test framework is auto-detected
-/// and `rspec_args` are appended to the auto-generated command.
-pub fn run_tests(
-    project_path: &str,
-    rspec_args: &[String],
-    test_cmd: Option<&str>,
-) -> anyhow::Result<TestRun> {
+/// and the default command is used.
+pub fn run_tests(project_path: &str, test_cmd: Option<&str>) -> anyhow::Result<TestRun> {
     let output = if let Some(cmd) = test_cmd {
-        // User-provided command — run via shell for env var support
         Command::new("sh")
             .args(["-c", cmd])
             .current_dir(project_path)
             .output()?
     } else {
         match detect_framework(project_path) {
-            Framework::RSpec => {
-                let mut cmd = Command::new("bundle");
-                cmd.args(["exec", "rspec", "--format", "progress"]);
-                for arg in rspec_args {
-                    cmd.arg(arg);
-                }
-                cmd.current_dir(project_path);
-                cmd.output()?
-            }
-            Framework::Minitest => {
-                Command::new("bundle")
-                    .args(["exec", "rake", "test"])
-                    .current_dir(project_path)
-                    .output()?
-            }
+            Framework::RSpec => Command::new("bundle")
+                .args(["exec", "rspec", "--format", "progress"])
+                .current_dir(project_path)
+                .output()?,
+            Framework::Minitest => Command::new("bundle")
+                .args(["exec", "rake", "test"])
+                .current_dir(project_path)
+                .output()?,
             Framework::Unknown => {
-                anyhow::bail!("No test framework detected (no spec/ or test/ directory). Provide --test-cmd instead.")
+                anyhow::bail!(
+                    "No test framework detected. Provide --test-cmd."
+                )
             }
         }
     };
@@ -126,55 +115,30 @@ mod tests {
     }
 
     #[test]
-    fn test_outcome_equality() {
-        assert_eq!(TestOutcome::Pass, TestOutcome::Pass);
-        assert_eq!(TestOutcome::Fail, TestOutcome::Fail);
-        assert_eq!(TestOutcome::Error, TestOutcome::Error);
-        assert_ne!(TestOutcome::Pass, TestOutcome::Fail);
-        assert_ne!(TestOutcome::Pass, TestOutcome::Error);
-        assert_ne!(TestOutcome::Fail, TestOutcome::Error);
-    }
-
-    #[test]
     fn test_run_tests_unknown_framework_returns_error() {
         let dir = tempfile::tempdir().unwrap();
-        let result = run_tests(dir.path().to_str().unwrap(), &[], None);
+        let result = run_tests(dir.path().to_str().unwrap(), None);
         assert!(result.is_err());
     }
 
     #[test]
-    fn test_custom_test_cmd_is_used() {
+    fn test_custom_test_cmd_pass() {
         let dir = tempfile::tempdir().unwrap();
-        let result = run_tests(
-            dir.path().to_str().unwrap(),
-            &[],
-            Some("echo hello && exit 0"),
-        );
-        assert!(result.is_ok());
+        let result = run_tests(dir.path().to_str().unwrap(), Some("echo ok && exit 0"));
         assert_eq!(result.unwrap().outcome, TestOutcome::Pass);
     }
 
     #[test]
-    fn test_custom_test_cmd_exit_1_is_fail() {
+    fn test_custom_test_cmd_fail() {
         let dir = tempfile::tempdir().unwrap();
-        let result = run_tests(
-            dir.path().to_str().unwrap(),
-            &[],
-            Some("echo 'test failed' && exit 1"),
-        );
-        assert!(result.is_ok());
+        let result = run_tests(dir.path().to_str().unwrap(), Some("echo fail && exit 1"));
         assert_eq!(result.unwrap().outcome, TestOutcome::Fail);
     }
 
     #[test]
-    fn test_custom_test_cmd_exit_2_is_error() {
+    fn test_custom_test_cmd_error() {
         let dir = tempfile::tempdir().unwrap();
-        let result = run_tests(
-            dir.path().to_str().unwrap(),
-            &[],
-            Some("exit 2"),
-        );
-        assert!(result.is_ok());
+        let result = run_tests(dir.path().to_str().unwrap(), Some("exit 2"));
         assert_eq!(result.unwrap().outcome, TestOutcome::Error);
     }
 }

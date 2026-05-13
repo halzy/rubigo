@@ -38,16 +38,15 @@ impl MutationResult {
 }
 
 /// Run mutation testing on a Ruby project directory.
-/// `verbosity`: 0 = default, 1 = show rspec output on failure, 2+ = always show rspec output.
-/// `cache_path`: if Some, load/save previously killed mutations to skip them.
 /// `test_cmd`: if Some, run this shell command instead of auto-detected framework.
+/// `cache_path`: if Some, load/save previously killed mutations to skip them.
+/// `verbosity`: 0 = default, 1 = show output on failure, 2+ = always show output.
 pub fn run_mutation_testing(
     project_path: &str,
-    rspec_args: &[String],
+    test_cmd: Option<&str>,
+    cache_path: Option<&str>,
     limit: Option<usize>,
     verbosity: u8,
-    cache_path: Option<&str>,
-    test_cmd: Option<&str>,
 ) -> anyhow::Result<Vec<MutationResult>> {
     // Step 1: Find all Ruby source files (exclude spec/, test/, vendor/ dirs)
     let rb_files: Vec<String> = walkdir::WalkDir::new(project_path)
@@ -97,14 +96,14 @@ pub fn run_mutation_testing(
 
     // Step 2.5: Load cache of previously killed mutations
     let mut results = Vec::new();
-    let cache: Option<(std::collections::HashSet<MutationId>, std::path::PathBuf)> = cache_path
-        .map(|p| {
+    let cache: Option<(std::collections::HashSet<MutationId>, std::path::PathBuf)> =
+        cache_path.map(|p| {
             let path = std::path::PathBuf::from(p);
             let killed_set = load_cache(&path);
             (killed_set, path)
         });
 
-    // Separate known-killed points from the run list, add as Skipped results
+    // Separate known-killed points from the run list
     if let Some((ref killed_set, _)) = cache {
         let (to_run, skipped): (Vec<_>, Vec<_>) = all_points
             .into_iter()
@@ -126,7 +125,10 @@ pub fn run_mutation_testing(
     }
 
     if all_points.is_empty() {
-        println!("All {} mutations were previously killed. Nothing to test.", results.len());
+        println!(
+            "All {} mutations were previously killed. Nothing to test.",
+            results.len()
+        );
         return Ok(results);
     }
 
@@ -139,11 +141,11 @@ pub fn run_mutation_testing(
     // Step 3: Run baseline test suite first to time it and ensure it works
     println!("Running baseline test suite...");
     let baseline_start = Instant::now();
-    let baseline = runner::run_tests(project_path, rspec_args, test_cmd)?;
+    let baseline = runner::run_tests(project_path, test_cmd)?;
     let baseline_duration = baseline_start.elapsed();
 
     if verbosity >= 2 {
-        println!("--- baseline rspec output ---");
+        println!("--- baseline output ---");
         print!("{}", baseline.stdout);
         if !baseline.stderr.is_empty() {
             eprint!("{}", baseline.stderr);
@@ -159,7 +161,9 @@ pub fn run_mutation_testing(
         let total_est = baseline_duration * all_points.len() as u32;
         println!(
             "Baseline: {:?} per run ~ est. total: ~{:?} for {} mutations\n",
-            baseline_duration, total_est, all_points.len()
+            baseline_duration,
+            total_est,
+            all_points.len()
         );
     }
 
@@ -175,12 +179,13 @@ pub fn run_mutation_testing(
         let mutated = crate::mutator::apply_mutation(&original, point);
         std::fs::write(&point.file, &mutated)?;
 
-        let test_run = runner::run_tests(project_path, rspec_args, test_cmd).unwrap_or_else(|_| TestRun {
-            outcome: runner::TestOutcome::Error,
-            stdout: String::new(),
-            stderr: "run_tests returned Err".into(),
-            exit_code: None,
-        });
+        let test_run =
+            runner::run_tests(project_path, test_cmd).unwrap_or_else(|_| TestRun {
+                outcome: runner::TestOutcome::Error,
+                stdout: String::new(),
+                stderr: "run_tests failed".into(),
+                exit_code: None,
+            });
 
         // Restore original
         std::fs::write(&point.file, &original)?;
@@ -330,19 +335,9 @@ mod tests {
     }
 
     #[test]
-    fn test_mutation_outcome_equality() {
-        assert_eq!(MutationOutcome::Killed, MutationOutcome::Killed);
-        assert_eq!(MutationOutcome::Survived, MutationOutcome::Survived);
-        assert_eq!(MutationOutcome::Error, MutationOutcome::Error);
-        assert_eq!(MutationOutcome::Skipped, MutationOutcome::Skipped);
-        assert_ne!(MutationOutcome::Killed, MutationOutcome::Survived);
-        assert_ne!(MutationOutcome::Killed, MutationOutcome::Skipped);
-    }
-
-    #[test]
     fn test_run_mutation_testing_rejects_non_ruby_projects() {
         let dir = tempfile::tempdir().unwrap();
-        let result = run_mutation_testing(dir.path().to_str().unwrap(), &[], None, 0, None, None);
+        let result = run_mutation_testing(dir.path().to_str().unwrap(), None, None, None, 0);
         assert!(result.is_err());
         assert!(result
             .unwrap_err()
@@ -356,6 +351,6 @@ mod tests {
         std::fs::create_dir_all(dir.path().join("spec")).unwrap();
         std::fs::create_dir_all(dir.path().join("lib")).unwrap();
         std::fs::write(dir.path().join("lib").join("foo.rb"), "# nothing\n").unwrap();
-        let _ = run_mutation_testing(dir.path().to_str().unwrap(), &[], None, 0, None, None);
+        let _ = run_mutation_testing(dir.path().to_str().unwrap(), None, None, None, 0);
     }
 }
