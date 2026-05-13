@@ -23,6 +23,12 @@ struct Cli {
     /// Cache file for previously killed mutations (skip them on re-runs)
     #[arg(long = "cache", value_name = "FILE")]
     cache: Option<String>,
+
+    /// Full shell command to run the test suite. Supports env vars, pipes, etc.
+    /// If not provided, auto-detects RSpec or Minitest.
+    /// Example: DATABASE_URL=... bundle exec rspec --tag ~db
+    #[arg(long = "test-cmd", value_name = "CMD")]
+    test_cmd: Option<String>,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -33,6 +39,7 @@ fn main() -> anyhow::Result<()> {
         cli.limit,
         cli.verbosity,
         cli.cache.as_deref(),
+        cli.test_cmd.as_deref(),
     )?;
 
     let killed = results.iter().filter(|r| r.killed()).count();

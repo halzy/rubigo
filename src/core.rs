@@ -40,12 +40,14 @@ impl MutationResult {
 /// Run mutation testing on a Ruby project directory.
 /// `verbosity`: 0 = default, 1 = show rspec output on failure, 2+ = always show rspec output.
 /// `cache_path`: if Some, load/save previously killed mutations to skip them.
+/// `test_cmd`: if Some, run this shell command instead of auto-detected framework.
 pub fn run_mutation_testing(
     project_path: &str,
     rspec_args: &[String],
     limit: Option<usize>,
     verbosity: u8,
     cache_path: Option<&str>,
+    test_cmd: Option<&str>,
 ) -> anyhow::Result<Vec<MutationResult>> {
     // Step 1: Find all Ruby source files (exclude spec/, test/, vendor/ dirs)
     let rb_files: Vec<String> = walkdir::WalkDir::new(project_path)
@@ -137,7 +139,7 @@ pub fn run_mutation_testing(
     // Step 3: Run baseline test suite first to time it and ensure it works
     println!("Running baseline test suite...");
     let baseline_start = Instant::now();
-    let baseline = runner::run_tests(project_path, rspec_args)?;
+    let baseline = runner::run_tests(project_path, rspec_args, test_cmd)?;
     let baseline_duration = baseline_start.elapsed();
 
     if verbosity >= 2 {
@@ -173,7 +175,7 @@ pub fn run_mutation_testing(
         let mutated = crate::mutator::apply_mutation(&original, point);
         std::fs::write(&point.file, &mutated)?;
 
-        let test_run = runner::run_tests(project_path, rspec_args).unwrap_or_else(|_| TestRun {
+        let test_run = runner::run_tests(project_path, rspec_args, test_cmd).unwrap_or_else(|_| TestRun {
             outcome: runner::TestOutcome::Error,
             stdout: String::new(),
             stderr: "run_tests returned Err".into(),
@@ -340,7 +342,7 @@ mod tests {
     #[test]
     fn test_run_mutation_testing_rejects_non_ruby_projects() {
         let dir = tempfile::tempdir().unwrap();
-        let result = run_mutation_testing(dir.path().to_str().unwrap(), &[], None, 0, None);
+        let result = run_mutation_testing(dir.path().to_str().unwrap(), &[], None, 0, None, None);
         assert!(result.is_err());
         assert!(result
             .unwrap_err()
@@ -354,6 +356,6 @@ mod tests {
         std::fs::create_dir_all(dir.path().join("spec")).unwrap();
         std::fs::create_dir_all(dir.path().join("lib")).unwrap();
         std::fs::write(dir.path().join("lib").join("foo.rb"), "# nothing\n").unwrap();
-        let _ = run_mutation_testing(dir.path().to_str().unwrap(), &[], None, 0, None);
+        let _ = run_mutation_testing(dir.path().to_str().unwrap(), &[], None, 0, None, None);
     }
 }
