@@ -595,22 +595,25 @@ mod tests {
     }
 
     #[test]
-    fn test_spec_rb_files_are_excluded() {
-        // _spec.rb files outside spec/ directory should still be excluded
+    fn test_spec_dir_rb_files_are_excluded() {
+        // .rb files inside spec/ directory must be skipped entirely.
+        // A file like spec/support/shared_examples.rb may have operator code
+        // but should never be mutated.
         let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("spec/support")).unwrap();
         std::fs::create_dir_all(dir.path().join("lib")).unwrap();
 
-        // A real source file with a mutation
+        // Real source in lib/
         std::fs::write(
             dir.path().join("lib").join("foo.rb"),
             "class Foo\n  def bar(a, b)\n    a == b\n  end\nend\n",
         )
         .unwrap();
 
-        // A _spec.rb file accidentally co-located in lib/
+        // Shared example in spec/support/ — has "==" but must be excluded
         std::fs::write(
-            dir.path().join("lib").join("foo_spec.rb"),
-            "  a == b\n", // would produce a mutation if not filtered
+            dir.path().join("spec/support/shared_examples.rb"),
+            "RSpec.shared_examples 'comparable' do\n  it { expect(a == b).to be true }\nend\n",
         )
         .unwrap();
 
@@ -624,8 +627,199 @@ mod tests {
         };
 
         let results = run_mutation_testing(&cfg).unwrap();
-        // Only foo.rb should be found — foo_spec.rb excluded by suffix
         assert_eq!(results.len(), 1);
         assert!(results[0].point.file.ends_with("lib/foo.rb"));
+    }
+
+    #[test]
+    fn test_test_dir_rb_files_are_excluded() {
+        // .rb files inside test/ directory (Minitest convention) excluded.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("test")).unwrap();
+        std::fs::create_dir_all(dir.path().join("lib")).unwrap();
+
+        // Source in lib/
+        std::fs::write(
+            dir.path().join("lib").join("foo.rb"),
+            "class Foo\n  def bar(a, b)\n    a == b\n  end\nend\n",
+        )
+        .unwrap();
+
+        // Test helper with operators — must be excluded
+        std::fs::write(
+            dir.path().join("test/test_helper.rb"),
+            "class Minitest::Test\n  def assert_equal(a, b)\n    a != b\n  end\nend\n",
+        )
+        .unwrap();
+
+        let cfg = Config {
+            project_path: dir.path().to_str().unwrap(),
+            test_cmd: Some("echo ok && exit 0"),
+            cache_path: None,
+            limit: None,
+            list_only: false,
+            verbosity: Verbosity::Quiet,
+        };
+
+        let results = run_mutation_testing(&cfg).unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(results[0].point.file.ends_with("lib/foo.rb"));
+    }
+
+    #[test]
+    fn test_vendor_dir_rb_files_are_excluded() {
+        // .rb files inside vendor/ directory (bundled gems) excluded.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("vendor/bundle/gems/some_gem/lib")).unwrap();
+        std::fs::create_dir_all(dir.path().join("lib")).unwrap();
+
+        // Source in lib/
+        std::fs::write(
+            dir.path().join("lib").join("foo.rb"),
+            "class Foo\n  def bar(a, b)\n    a == b\n  end\nend\n",
+        )
+        .unwrap();
+
+        // Vendored gem — must be excluded
+        std::fs::write(
+            dir.path().join("vendor/bundle/gems/some_gem/lib/some_gem.rb"),
+            "module SomeGem\n  def self.compare(a, b)\n    a == b\n  end\nend\n",
+        )
+        .unwrap();
+
+        let cfg = Config {
+            project_path: dir.path().to_str().unwrap(),
+            test_cmd: Some("echo ok && exit 0"),
+            cache_path: None,
+            limit: None,
+            list_only: false,
+            verbosity: Verbosity::Quiet,
+        };
+
+        let results = run_mutation_testing(&cfg).unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(results[0].point.file.ends_with("lib/foo.rb"));
+    }
+
+    #[test]
+    fn test_spec_helper_excluded() {
+        // spec/spec_helper.rb is inside spec/ directory — must be excluded.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("spec")).unwrap();
+        std::fs::create_dir_all(dir.path().join("lib")).unwrap();
+
+        std::fs::write(
+            dir.path().join("lib").join("foo.rb"),
+            "class Foo\n  def bar(a, b)\n    a == b\n  end\nend\n",
+        )
+        .unwrap();
+
+        // spec_helper with no operators — shouldn't be mutated anyway,
+        // but the important thing is it's not even scanned.
+        std::fs::write(
+            dir.path().join("spec/spec_helper.rb"),
+            "RSpec.configure { |c| c.mock_with :rspec }\n",
+        )
+        .unwrap();
+
+        let cfg = Config {
+            project_path: dir.path().to_str().unwrap(),
+            test_cmd: Some("echo ok && exit 0"),
+            cache_path: None,
+            limit: None,
+            list_only: false,
+            verbosity: Verbosity::Quiet,
+        };
+
+        let results = run_mutation_testing(&cfg).unwrap();
+        assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn test_only_source_files_in_spec_dir_errors() {
+        // When ALL .rb files live in spec/ or test/ or vendor/,
+        // we should get an error (no source files found).
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("spec/models")).unwrap();
+        std::fs::write(
+            dir.path().join("spec/models/user_spec.rb"),
+            "RSpec.describe User do\n  it { expect(1 == 1).to be true }\nend\n",
+        )
+        .unwrap();
+
+        let cfg = Config {
+            project_path: dir.path().to_str().unwrap(),
+            test_cmd: Some("echo ok && exit 0"),
+            cache_path: None,
+            limit: None,
+            list_only: false,
+            verbosity: Verbosity::Quiet,
+        };
+
+        let result = run_mutation_testing(&cfg);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("No .rb source files"));
+    }
+
+    #[test]
+    fn test_spec_rb_suffix_excluded_outside_spec_dir() {
+        // _spec.rb files outside spec/ directory excluded by their suffix.
+        // Catches the case where a spec file is co-located with source.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("lib")).unwrap();
+
+        std::fs::write(
+            dir.path().join("lib").join("foo.rb"),
+            "class Foo\n  def bar(a, b)\n    a == b\n  end\nend\n",
+        )
+        .unwrap();
+
+        // _spec.rb accidentally in lib/ — has a mutation but must be excluded
+        std::fs::write(
+            dir.path().join("lib").join("foo_spec.rb"),
+            "  a == b\n",
+        )
+        .unwrap();
+
+        let cfg = Config {
+            project_path: dir.path().to_str().unwrap(),
+            test_cmd: Some("echo ok && exit 0"),
+            cache_path: None,
+            limit: None,
+            list_only: false,
+            verbosity: Verbosity::Quiet,
+        };
+
+        let results = run_mutation_testing(&cfg).unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(results[0].point.file.ends_with("lib/foo.rb"));
+    }
+
+    #[test]
+    fn test_non_rb_files_not_scanned() {
+        // .erb, .rake, Gemfile, Rakefile, etc. should be ignored.
+        // Only .rb files are collected.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("lib")).unwrap();
+        std::fs::write(dir.path().join("lib/foo.rb"), "# empty\n").unwrap();
+        std::fs::write(dir.path().join("lib/template.erb"), "<%= 1 == 2 %>\n").unwrap();
+        std::fs::write(dir.path().join("Rakefile"), "task :default do; end\n").unwrap();
+        std::fs::write(dir.path().join("Gemfile"), "source 'https://rubygems.org'\n").unwrap();
+
+        let cfg = Config {
+            project_path: dir.path().to_str().unwrap(),
+            test_cmd: Some("echo ok && exit 0"),
+            cache_path: None,
+            limit: None,
+            list_only: false,
+            verbosity: Verbosity::Quiet,
+        };
+
+        let results = run_mutation_testing(&cfg).unwrap();
+        // Only lib/foo.rb should be found — no non-.rb files scanned
+        assert_eq!(results.len(), 0); // foo.rb has no operators, so 0 mutations
     }
 }
