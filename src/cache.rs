@@ -40,3 +40,89 @@ pub fn save_cache(path: &Path, killed: &[MutationId]) {
         .unwrap_or_else(|_| "[]".into());
     let _ = std::fs::write(path, contents);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn id(file: &str, line: usize, original: &str) -> MutationId {
+        MutationId {
+            file: file.to_string(),
+            line_number: line,
+            original: original.to_string(),
+        }
+    }
+
+    #[test]
+    fn test_load_cache_missing_file_returns_empty() {
+        let result = load_cache(Path::new("/tmp/rubigo-nonexistent-cache.json"));
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_load_cache_corrupted_json_returns_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bad.json");
+        std::fs::write(&path, "not valid json").unwrap();
+        let result = load_cache(&path);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_save_and_load_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cache.json");
+
+        let killed = vec![
+            id("a.rb", 3, "=="),
+            id("b.rb", 7, "!="),
+        ];
+        save_cache(&path, &killed);
+
+        let loaded = load_cache(&path);
+        assert_eq!(loaded.len(), 2);
+        assert!(loaded.contains(&id("a.rb", 3, "==")));
+        assert!(loaded.contains(&id("b.rb", 7, "!=")));
+    }
+
+    #[test]
+    fn test_save_cache_appends_to_existing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cache.json");
+
+        // First save
+        save_cache(&path, &[id("a.rb", 1, "==")]);
+        // Second save should append
+        save_cache(&path, &[id("b.rb", 2, "!=")]);
+
+        let loaded = load_cache(&path);
+        assert_eq!(loaded.len(), 2);
+        assert!(loaded.contains(&id("a.rb", 1, "==")));
+        assert!(loaded.contains(&id("b.rb", 2, "!=")));
+    }
+
+    #[test]
+    fn test_save_cache_deduplicates() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cache.json");
+
+        // Save the same id twice
+        save_cache(&path, &[id("a.rb", 1, "==")]);
+        save_cache(&path, &[id("a.rb", 1, "==")]);
+
+        let loaded = load_cache(&path);
+        assert_eq!(loaded.len(), 1);
+    }
+
+    #[test]
+    fn test_mutation_id_equality() {
+        let a = id("a.rb", 1, "==");
+        let b = id("a.rb", 1, "==");
+        let c = id("a.rb", 2, "==");
+        let d = id("a.rb", 1, "!=");
+
+        assert_eq!(a, b);  // same file + line + operator
+        assert_ne!(a, c);  // different line
+        assert_ne!(a, d);  // different operator
+    }
+}

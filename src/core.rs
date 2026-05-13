@@ -353,4 +353,49 @@ mod tests {
         std::fs::write(dir.path().join("lib").join("foo.rb"), "# nothing\n").unwrap();
         let _ = run_mutation_testing(dir.path().to_str().unwrap(), None, None, None, 0);
     }
+
+    #[test]
+    fn test_limit_zero_truncates_all() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("spec")).unwrap();
+        std::fs::create_dir_all(dir.path().join("lib")).unwrap();
+        std::fs::write(
+            dir.path().join("lib").join("foo.rb"),
+            "class Foo\n  def bar(a, b)\n    a == b\n  end\nend\n",
+        )
+        .unwrap();
+        let _ = run_mutation_testing(dir.path().to_str().unwrap(), None, None, Some(0), 0);
+    }
+
+    #[test]
+    fn test_all_cached_returns_early() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("spec")).unwrap();
+        std::fs::create_dir_all(dir.path().join("lib")).unwrap();
+        let source = "class Foo\n  def bar(a, b)\n    a == b\n  end\nend\n";
+        std::fs::write(dir.path().join("lib").join("foo.rb"), source).unwrap();
+
+        let cache_path = dir.path().join("cache.json");
+        crate::cache::save_cache(
+            &cache_path,
+            &[MutationId {
+                file: dir.path().join("lib/foo.rb").to_string_lossy().to_string(),
+                line_number: 3,
+                original: "==".to_string(),
+            }],
+        );
+
+        let results = run_mutation_testing(
+            dir.path().to_str().unwrap(),
+            None,
+            Some(cache_path.to_str().unwrap()),
+            None,
+            0,
+        );
+
+        assert!(results.is_ok());
+        let rs = results.unwrap();
+        assert!(!rs.is_empty());
+        assert!(rs.iter().all(|r| r.skipped()));
+    }
 }
