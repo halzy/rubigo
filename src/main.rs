@@ -28,6 +28,11 @@ struct Cli {
     #[arg(short = 'l', long = "list")]
     list: bool,
 
+    /// Dump the CST with node ids for every source file, then exit.
+    /// Useful for debugging false-positive mutations.
+    #[arg(long = "dump-cst")]
+    dump_cst: bool,
+
     /// Increase verbosity (-v: show on failure, -vv: show everything)
     #[arg(short = 'v', long = "verbose", action = clap::ArgAction::Count)]
     verbosity: u8,
@@ -42,6 +47,7 @@ fn main() -> anyhow::Result<()> {
         cache_path: cli.cache.as_deref(),
         limit: cli.limit,
         list_only: cli.list,
+        dump_cst: cli.dump_cst,
         verbosity: Verbosity::from_count(cli.verbosity),
     };
 

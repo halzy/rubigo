@@ -41,6 +41,34 @@ fn interrupted() -> bool {
     INTERRUPT_STATE.load(Ordering::SeqCst) >= 1
 }
 
+/// Recursively dump CST nodes with byte ranges and node IDs.
+/// Each node is indented; leaf nodes get a `*` marker.
+fn dump_cst_node(node: &tree_sitter::Node, source: &str, depth: usize) {
+    let indent = "  ".repeat(depth);
+    let text = &source[node.start_byte()..node.end_byte()];
+    let short = if text.len() > 70 {
+        format!("{}…", &text[..70].replace('\n', "\\n").replace('\t', "\\t"))
+    } else {
+        text.replace('\n', "\\n").replace('\t', "\\t")
+    };
+    let leaf = if node.child_count() == 0 { " *" } else { "" };
+    println!(
+        "{}[{:4}]  kind=\"{}\"  bytes={}..{}  \"{}\"{}",
+        indent,
+        node.id(),
+        node.kind(),
+        node.start_byte(),
+        node.end_byte(),
+        short,
+        leaf,
+    );
+    for i in 0..node.child_count() {
+        if let Some(child) = node.child(i as u32) {
+            dump_cst_node(&child, source, depth + 1);
+        }
+    }
+}
+
 // ── Data types ──────────────────────────────────────────
 
 #[derive(Debug, PartialEq)]
@@ -114,11 +142,21 @@ pub fn run_mutation_testing(cfg: &Config) -> anyhow::Result<Vec<MutationResult>>
     for file in &rb_files {
         let source = std::fs::read_to_string(file)?;
         let tree = parser::parse_source(&source)?;
+
+        if cfg.dump_cst {
+            println!("\n══════ {} ══════\n", file);
+            dump_cst_node(&tree.root_node(), &source, 0);
+        }
+
         let points = parser::find_mutations(&tree, &source, file);
         if !points.is_empty() {
             file_trees.insert(file.clone(), FileTree { source, tree });
         }
         all_points.extend(points);
+    }
+
+    if cfg.dump_cst {
+        return Ok(vec![]);
     }
 
     println!(
@@ -425,6 +463,7 @@ mod tests {
             limit: None,
             list_only: false,
             verbosity: Verbosity::Quiet,
+            dump_cst: false,
         };
         let result = run_mutation_testing(&cfg);
         assert!(result.is_err());
@@ -447,6 +486,7 @@ mod tests {
             limit: None,
             list_only: false,
             verbosity: Verbosity::Quiet,
+            dump_cst: false,
         };
         let _ = run_mutation_testing(&cfg);
     }
@@ -468,6 +508,7 @@ mod tests {
             limit: Some(0),
             list_only: false,
             verbosity: Verbosity::Quiet,
+            dump_cst: false,
         };
         let _ = run_mutation_testing(&cfg);
     }
@@ -502,6 +543,7 @@ mod tests {
             limit: None,
             list_only: false,
             verbosity: Verbosity::Quiet,
+            dump_cst: false,
         };
         let results = run_mutation_testing(&cfg).unwrap();
         assert!(!results.is_empty());
@@ -585,6 +627,7 @@ mod tests {
             limit: Some(1),
             list_only: false,
             verbosity: Verbosity::Quiet,
+            dump_cst: false,
         };
 
         let results = run_mutation_testing(&cfg).unwrap();
@@ -624,6 +667,7 @@ mod tests {
             limit: None,
             list_only: false,
             verbosity: Verbosity::Quiet,
+            dump_cst: false,
         };
 
         let results = run_mutation_testing(&cfg).unwrap();
@@ -659,6 +703,7 @@ mod tests {
             limit: None,
             list_only: false,
             verbosity: Verbosity::Quiet,
+            dump_cst: false,
         };
 
         let results = run_mutation_testing(&cfg).unwrap();
@@ -694,6 +739,7 @@ mod tests {
             limit: None,
             list_only: false,
             verbosity: Verbosity::Quiet,
+            dump_cst: false,
         };
 
         let results = run_mutation_testing(&cfg).unwrap();
@@ -729,6 +775,7 @@ mod tests {
             limit: None,
             list_only: false,
             verbosity: Verbosity::Quiet,
+            dump_cst: false,
         };
 
         let results = run_mutation_testing(&cfg).unwrap();
@@ -754,6 +801,7 @@ mod tests {
             limit: None,
             list_only: false,
             verbosity: Verbosity::Quiet,
+            dump_cst: false,
         };
 
         let result = run_mutation_testing(&cfg);
@@ -791,6 +839,7 @@ mod tests {
             limit: None,
             list_only: false,
             verbosity: Verbosity::Quiet,
+            dump_cst: false,
         };
 
         let results = run_mutation_testing(&cfg).unwrap();
@@ -816,6 +865,7 @@ mod tests {
             limit: None,
             list_only: false,
             verbosity: Verbosity::Quiet,
+            dump_cst: false,
         };
 
         let results = run_mutation_testing(&cfg).unwrap();

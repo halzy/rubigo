@@ -10,6 +10,7 @@ fn make_cfg(test_dir: &tempfile::TempDir) -> Config {
         limit: None,
         list_only: false,
         verbosity: Verbosity::Quiet,
+        dump_cst: false,
     }
 }
 
@@ -181,6 +182,7 @@ fn test_two_files_each_gets_targeted_spec() {
         limit: None,
         list_only: false,
         verbosity: Verbosity::Quiet,
+        dump_cst: false,
     };
 
     let results = rubigo::core::run_mutation_testing(&cfg).unwrap();

@@ -39,6 +39,8 @@ pub struct Config<'a> {
     pub limit: Option<usize>,
     /// Whether to only list mutation points without running tests.
     pub list_only: bool,
+    /// Dump the concrete syntax tree with node IDs for every parsed file, then exit.
+    pub dump_cst: bool,
     /// How verbose the output should be.
     pub verbosity: Verbosity,
 }
