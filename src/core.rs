@@ -1,15 +1,39 @@
 use crate::mutator::MutationPoint;
 use crate::parser;
-use crate::runner;
+use crate::runner::{self, TestOutcome};
+
+#[derive(Debug)]
+pub enum MutationOutcome {
+    Killed,     // tests ran and caught the mutation
+    Survived,   // tests ran but didn't catch it
+    Error,      // tests could not run (infrastructure, etc.)
+}
 
 pub struct MutationResult {
     pub point: MutationPoint,
-    pub killed: bool,
+    pub outcome: MutationOutcome,
+}
+
+impl MutationResult {
+    pub fn killed(&self) -> bool {
+        matches!(self.outcome, MutationOutcome::Killed)
+    }
+
+    pub fn survived(&self) -> bool {
+        matches!(self.outcome, MutationOutcome::Survived)
+    }
+
+    pub fn errored(&self) -> bool {
+        matches!(self.outcome, MutationOutcome::Error)
+    }
 }
 
 /// Run mutation testing on a Ruby project directory.
-pub fn run_mutation_testing(project_path: &str) -> anyhow::Result<Vec<MutationResult>> {
-    // Step 1: Find all Ruby source files (exclude spec/ and test/ dirs)
+pub fn run_mutation_testing(
+    project_path: &str,
+    rspec_args: &[String],
+) -> anyhow::Result<Vec<MutationResult>> {
+    // Step 1: Find all Ruby source files (exclude spec/, test/, vendor/ dirs)
     let rb_files: Vec<String> = walkdir::WalkDir::new(project_path)
         .into_iter()
         .filter_map(|e| e.ok())
@@ -47,9 +71,17 @@ pub fn run_mutation_testing(project_path: &str) -> anyhow::Result<Vec<MutationRe
         return Ok(vec![]);
     }
 
-    // Step 3: Test each mutation one at a time
+    // Step 3: Run baseline test suite first to ensure it works
+    println!("Running baseline test suite...");
+    let baseline = runner::run_tests(project_path, rspec_args)?;
+    if baseline == TestOutcome::Error {
+        eprintln!("WARNING: Baseline test suite could not run — all mutations will report as errors.\n");
+    }
+
+    // Step 4: Test each mutation one at a time
     let mut results = Vec::new();
     let total = all_points.len();
+    let mut errors = 0usize;
 
     for (i, point) in all_points.iter().enumerate() {
         println!(
@@ -68,15 +100,31 @@ pub fn run_mutation_testing(project_path: &str) -> anyhow::Result<Vec<MutationRe
         let mutated = crate::mutator::apply_mutation(&original, point);
         std::fs::write(&point.file, &mutated)?;
 
-        let all_pass = runner::run_tests(project_path).unwrap_or(false);
+        let outcome = runner::run_tests(project_path, rspec_args).unwrap_or(TestOutcome::Error);
 
         // Restore original
         std::fs::write(&point.file, &original)?;
 
+        let mutation_outcome = match outcome {
+            TestOutcome::Pass => MutationOutcome::Survived,
+            TestOutcome::Fail => MutationOutcome::Killed,
+            TestOutcome::Error => {
+                errors += 1;
+                MutationOutcome::Error
+            }
+        };
+
         results.push(MutationResult {
             point: point.clone(),
-            killed: !all_pass,
+            outcome: mutation_outcome,
         });
+    }
+
+    if errors > 0 {
+        eprintln!(
+            "WARNING: {} mutation(s) could not be tested due to test suite errors.",
+            errors
+        );
     }
 
     Ok(results)
