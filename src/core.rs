@@ -93,7 +93,10 @@ pub fn run_mutation_testing(cfg: &Config) -> anyhow::Result<Vec<MutationResult>>
         .filter(|e| e.path().extension().map_or(false, |ext| ext == "rb"))
         .filter(|e| {
             let p = e.path().to_string_lossy();
-            !p.contains("/spec/") && !p.contains("/test/") && !p.contains("/vendor/")
+            !p.contains("/spec/")
+                && !p.contains("/test/")
+                && !p.contains("/vendor/")
+                && !p.ends_with("_spec.rb")
         })
         .map(|e| e.path().to_string_lossy().to_string())
         .collect();
@@ -417,7 +420,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let cfg = Config {
             project_path: dir.path().to_str().unwrap(),
-            test_cmd: None,
+            test_cmd: Some("echo ok && exit 0"),
             cache_path: None,
             limit: None,
             list_only: false,
@@ -439,7 +442,7 @@ mod tests {
         std::fs::write(dir.path().join("lib").join("foo.rb"), "# nothing\n").unwrap();
         let cfg = Config {
             project_path: dir.path().to_str().unwrap(),
-            test_cmd: None,
+            test_cmd: Some("echo ok && exit 0"),
             cache_path: None,
             limit: None,
             list_only: false,
@@ -460,7 +463,7 @@ mod tests {
         .unwrap();
         let cfg = Config {
             project_path: dir.path().to_str().unwrap(),
-            test_cmd: None,
+            test_cmd: Some("echo ok && exit 0"),
             cache_path: None,
             limit: Some(0),
             list_only: false,
@@ -494,7 +497,7 @@ mod tests {
 
         let cfg = Config {
             project_path: dir.path().to_str().unwrap(),
-            test_cmd: None,
+            test_cmd: Some("echo ok && exit 0"),
             cache_path: Some(cache_path.to_str().unwrap()),
             limit: None,
             list_only: false,
@@ -589,5 +592,40 @@ mod tests {
         assert!(results[0].killed());
         assert_eq!(results[0].point.original, "==");
         assert_eq!(results[0].point.replacement, "!=");
+    }
+
+    #[test]
+    fn test_spec_rb_files_are_excluded() {
+        // _spec.rb files outside spec/ directory should still be excluded
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("lib")).unwrap();
+
+        // A real source file with a mutation
+        std::fs::write(
+            dir.path().join("lib").join("foo.rb"),
+            "class Foo\n  def bar(a, b)\n    a == b\n  end\nend\n",
+        )
+        .unwrap();
+
+        // A _spec.rb file accidentally co-located in lib/
+        std::fs::write(
+            dir.path().join("lib").join("foo_spec.rb"),
+            "  a == b\n", // would produce a mutation if not filtered
+        )
+        .unwrap();
+
+        let cfg = Config {
+            project_path: dir.path().to_str().unwrap(),
+            test_cmd: Some("echo ok && exit 0"),
+            cache_path: None,
+            limit: None,
+            list_only: false,
+            verbosity: Verbosity::Quiet,
+        };
+
+        let results = run_mutation_testing(&cfg).unwrap();
+        // Only foo.rb should be found — foo_spec.rb excluded by suffix
+        assert_eq!(results.len(), 1);
+        assert!(results[0].point.file.ends_with("lib/foo.rb"));
     }
 }
