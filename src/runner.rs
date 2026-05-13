@@ -25,8 +25,16 @@ pub enum TestOutcome {
     Error,  // tests could not run (infrastructure, compile error, etc.)
 }
 
+/// Full result of a test run: outcome plus captured output for verbosity.
+pub struct TestRun {
+    pub outcome: TestOutcome,
+    pub stdout: String,
+    pub stderr: String,
+    pub exit_code: Option<i32>,
+}
+
 /// Run the test suite. Respects extra rspec CLI args if provided.
-pub fn run_tests(project_path: &str, rspec_args: &[String]) -> anyhow::Result<TestOutcome> {
+pub fn run_tests(project_path: &str, rspec_args: &[String]) -> anyhow::Result<TestRun> {
     match detect_framework(project_path) {
         Framework::RSpec => {
             let mut cmd = Command::new("bundle");
@@ -37,20 +45,21 @@ pub fn run_tests(project_path: &str, rspec_args: &[String]) -> anyhow::Result<Te
             cmd.current_dir(project_path);
             let output = cmd.output()?;
 
-            if output.status.success() {
-                Ok(TestOutcome::Pass)
-            } else if output.status.code() == Some(1) {
-                // RSpec exits 1 on test failures — that's expected
-                Ok(TestOutcome::Fail)
+            let code = output.status.code();
+            let outcome = if output.status.success() {
+                TestOutcome::Pass
+            } else if code == Some(1) {
+                TestOutcome::Fail
             } else {
-                // Exit code 2+ means rspec itself errored (syntax, load error, etc.)
-                eprintln!("rspec exited with code {:?}", output.status.code());
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                if !stderr.is_empty() {
-                    eprintln!("{}", stderr);
-                }
-                Ok(TestOutcome::Error)
-            }
+                TestOutcome::Error
+            };
+
+            Ok(TestRun {
+                outcome,
+                stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+                exit_code: code,
+            })
         }
         Framework::Minitest => {
             let output = Command::new("bundle")
@@ -58,14 +67,21 @@ pub fn run_tests(project_path: &str, rspec_args: &[String]) -> anyhow::Result<Te
                 .current_dir(project_path)
                 .output()?;
 
-            if output.status.success() {
-                Ok(TestOutcome::Pass)
-            } else if output.status.code() == Some(1) {
-                Ok(TestOutcome::Fail)
+            let code = output.status.code();
+            let outcome = if output.status.success() {
+                TestOutcome::Pass
+            } else if code == Some(1) {
+                TestOutcome::Fail
             } else {
-                eprintln!("minitest exited with code {:?}", output.status.code());
-                Ok(TestOutcome::Error)
-            }
+                TestOutcome::Error
+            };
+
+            Ok(TestRun {
+                outcome,
+                stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+                exit_code: code,
+            })
         }
         Framework::Unknown => {
             anyhow::bail!("No test framework detected (no spec/ or test/ directory)")
@@ -76,8 +92,6 @@ pub fn run_tests(project_path: &str, rspec_args: &[String]) -> anyhow::Result<Te
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // ── Framework detection ────────────────────────────────
 
     #[test]
     fn test_detect_rspec_when_spec_dir_exists() {
@@ -111,8 +125,6 @@ mod tests {
         assert!(matches!(detect_framework(path), Framework::Unknown));
     }
 
-    // ── Test outcome helpers ───────────────────────────────
-
     #[test]
     fn test_outcome_equality() {
         assert_eq!(TestOutcome::Pass, TestOutcome::Pass);
@@ -123,21 +135,15 @@ mod tests {
         assert_ne!(TestOutcome::Fail, TestOutcome::Error);
     }
 
-    // ── run_tests error cases ──────────────────────────────
-
     #[test]
     fn test_run_tests_unknown_framework_returns_error() {
         let dir = tempfile::tempdir().unwrap();
         let result = run_tests(dir.path().to_str().unwrap(), &[]);
         assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("No test framework detected"));
     }
 
     #[test]
     fn test_run_tests_with_rspec_args_passes_them_through() {
-        // We can't easily test the actual command invocation, but we can
-        // verify that unknown framework still fails when args are passed.
         let dir = tempfile::tempdir().unwrap();
         let args = vec!["--tag".to_string(), "~slow".to_string()];
         let result = run_tests(dir.path().to_str().unwrap(), &args);

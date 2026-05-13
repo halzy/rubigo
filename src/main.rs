@@ -15,11 +15,16 @@ struct Cli {
     /// Limit to the first N mutations (useful for quick checks)
     #[arg(short = 'n', long = "limit", value_name = "N")]
     limit: Option<usize>,
+
+    /// Increase verbosity (-v: show rspec output on SURVIVED/ERROR, -vv: always show)
+    #[arg(short = 'v', long = "verbose", action = clap::ArgAction::Count)]
+    verbosity: u8,
 }
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
-    let results = rubigo::core::run_mutation_testing(&cli.path, &cli.rspec_args, cli.limit)?;
+    let results =
+        rubigo::core::run_mutation_testing(&cli.path, &cli.rspec_args, cli.limit, cli.verbosity)?;
 
     let killed = results.iter().filter(|r| r.killed()).count();
     let survived = results.iter().filter(|r| r.survived()).count();

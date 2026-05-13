@@ -2,7 +2,7 @@ use std::time::Instant;
 
 use crate::mutator::MutationPoint;
 use crate::parser;
-use crate::runner::{self, TestOutcome};
+use crate::runner::{self, TestRun};
 
 #[derive(Debug, PartialEq)]
 pub enum MutationOutcome {
@@ -32,10 +32,12 @@ impl MutationResult {
 }
 
 /// Run mutation testing on a Ruby project directory.
+/// `verbosity`: 0 = default, 1 = show rspec output on failure, 2+ = always show rspec output.
 pub fn run_mutation_testing(
     project_path: &str,
     rspec_args: &[String],
     limit: Option<usize>,
+    verbosity: u8,
 ) -> anyhow::Result<Vec<MutationResult>> {
     // Step 1: Find all Ruby source files (exclude spec/, test/, vendor/ dirs)
     let rb_files: Vec<String> = walkdir::WalkDir::new(project_path)
@@ -89,7 +91,16 @@ pub fn run_mutation_testing(
     let baseline = runner::run_tests(project_path, rspec_args)?;
     let baseline_duration = baseline_start.elapsed();
 
-    if baseline == TestOutcome::Error {
+    if verbosity >= 2 {
+        println!("--- baseline rspec output ---");
+        print!("{}", baseline.stdout);
+        if !baseline.stderr.is_empty() {
+            eprint!("{}", baseline.stderr);
+        }
+        println!("--- end baseline ---\n");
+    }
+
+    if baseline.outcome == runner::TestOutcome::Error {
         eprintln!(
             "WARNING: Baseline test suite could not run — all mutations will report as errors.\n"
         );
@@ -113,15 +124,20 @@ pub fn run_mutation_testing(
         let mutated = crate::mutator::apply_mutation(&original, point);
         std::fs::write(&point.file, &mutated)?;
 
-        let outcome = runner::run_tests(project_path, rspec_args).unwrap_or(TestOutcome::Error);
+        let test_run = runner::run_tests(project_path, rspec_args).unwrap_or_else(|_| TestRun {
+            outcome: runner::TestOutcome::Error,
+            stdout: String::new(),
+            stderr: "run_tests returned Err".into(),
+            exit_code: None,
+        });
 
         // Restore original
         std::fs::write(&point.file, &original)?;
 
-        let mutation_outcome = match outcome {
-            TestOutcome::Pass => MutationOutcome::Survived,
-            TestOutcome::Fail => MutationOutcome::Killed,
-            TestOutcome::Error => {
+        let mutation_outcome = match test_run.outcome {
+            runner::TestOutcome::Pass => MutationOutcome::Survived,
+            runner::TestOutcome::Fail => MutationOutcome::Killed,
+            runner::TestOutcome::Error => {
                 errors += 1;
                 MutationOutcome::Error
             }
@@ -151,6 +167,17 @@ pub fn run_mutation_testing(
             outcome_str,
             eta,
         );
+
+        // Verbosity: show test output
+        if matches!(mutation_outcome, MutationOutcome::Survived | MutationOutcome::Error)
+            && verbosity >= 1
+            || verbosity >= 2
+        {
+            println!("{}", test_run.stdout);
+            if !test_run.stderr.is_empty() {
+                eprintln!("{}", test_run.stderr);
+            }
+        }
 
         results.push(MutationResult {
             point: point.clone(),
@@ -189,8 +216,6 @@ mod tests {
             replacement: replacement.to_string(),
         }
     }
-
-    // ── MutationResult helpers ─────────────────────────────
 
     #[test]
     fn test_killed_returns_true_for_killed() {
@@ -258,7 +283,7 @@ mod tests {
     #[test]
     fn test_run_mutation_testing_rejects_non_ruby_projects() {
         let dir = tempfile::tempdir().unwrap();
-        let result = run_mutation_testing(dir.path().to_str().unwrap(), &[], None);
+        let result = run_mutation_testing(dir.path().to_str().unwrap(), &[], None, 0);
         assert!(result.is_err());
         assert!(result
             .unwrap_err()
@@ -272,6 +297,6 @@ mod tests {
         std::fs::create_dir_all(dir.path().join("spec")).unwrap();
         std::fs::create_dir_all(dir.path().join("lib")).unwrap();
         std::fs::write(dir.path().join("lib").join("foo.rb"), "# nothing\n").unwrap();
-        let _ = run_mutation_testing(dir.path().to_str().unwrap(), &[], None);
+        let _ = run_mutation_testing(dir.path().to_str().unwrap(), &[], None, 0);
     }
 }
