@@ -4,6 +4,7 @@ pub fn print_report(
     killed: usize,
     survived: usize,
     errors: usize,
+    skipped: usize,
     total: usize,
     results: &[MutationResult],
 ) {
@@ -17,6 +18,9 @@ pub fn print_report(
     println!("  Killed   (tests caught it):  {}", killed);
     println!("  Survived (tests missed it):  {}", survived);
     println!("  Errors   (could not test):   {}", errors);
+    if skipped > 0 {
+        println!("  Skipped  (from cache):       {}", skipped);
+    }
     println!();
 
     let testable = killed + survived;
@@ -51,8 +55,23 @@ pub fn print_report(
         println!();
     }
 
+    if skipped > 0 {
+        println!("--- Skipped (from cache) ---");
+        for r in results.iter().filter(|r| r.skipped()) {
+            println!(
+                "  {}:{}: `{}` → `{}` was previously killed",
+                r.point.file, r.point.line_number, r.point.original, r.point.replacement
+            );
+        }
+        println!();
+    }
+
     if survived == 0 && errors == 0 && total > 0 {
-        println!("All mutations were killed. Excellent test coverage!");
+        if skipped > 0 {
+            println!("All new mutations were killed. Excellent test coverage! ({} cached)", skipped);
+        } else {
+            println!("All mutations were killed. Excellent test coverage!");
+        }
     }
 
     println!();
@@ -63,7 +82,14 @@ mod tests {
     use crate::core::{MutationOutcome, MutationResult};
     use crate::mutator::MutationPoint;
 
-    fn mp(file: &str, line: usize, start: usize, end: usize, orig: &str, repl: &str) -> MutationPoint {
+    fn mp(
+        file: &str,
+        line: usize,
+        start: usize,
+        end: usize,
+        orig: &str,
+        repl: &str,
+    ) -> MutationPoint {
         MutationPoint {
             file: file.to_string(),
             line_number: line,
@@ -92,7 +118,7 @@ mod tests {
     #[test]
     fn test_score_zero_killed_zero_testable() {
         let results: Vec<MutationResult> = vec![];
-        super::print_report(0, 0, 0, 0, &results);
+        super::print_report(0, 0, 0, 0, 0, &results);
     }
 
     #[test]
@@ -101,7 +127,7 @@ mod tests {
             mr("a.rb", 3, 0, 2, "==", "!=", MutationOutcome::Killed),
             mr("a.rb", 7, 5, 7, "!=", "==", MutationOutcome::Killed),
         ];
-        super::print_report(2, 0, 0, 2, &results);
+        super::print_report(2, 0, 0, 0, 2, &results);
     }
 
     #[test]
@@ -110,7 +136,7 @@ mod tests {
             mr("a.rb", 1, 0, 2, "==", "!=", MutationOutcome::Killed),
             mr("b.rb", 2, 0, 2, "!=", "==", MutationOutcome::Survived),
         ];
-        super::print_report(1, 1, 0, 2, &results);
+        super::print_report(1, 1, 0, 0, 2, &results);
     }
 
     #[test]
@@ -121,18 +147,28 @@ mod tests {
             mr("c.rb", 1, 0, 2, "!=", "==", MutationOutcome::Survived),
             mr("d.rb", 1, 0, 2, "==", "!=", MutationOutcome::Error),
         ];
-        super::print_report(2, 1, 1, 4, &results);
+        super::print_report(2, 1, 1, 0, 4, &results);
+    }
+
+    #[test]
+    fn test_report_with_skipped_mutations() {
+        let results = vec![
+            mr("a.rb", 1, 0, 2, "==", "!=", MutationOutcome::Killed),
+            mr("b.rb", 2, 0, 2, "!=", "==", MutationOutcome::Skipped),
+            mr("c.rb", 3, 0, 2, "==", "!=", MutationOutcome::Skipped),
+        ];
+        super::print_report(1, 0, 0, 2, 3, &results);
     }
 
     #[test]
     fn test_no_panic_on_empty_results() {
-        super::print_report(0, 0, 0, 0, &[]);
+        super::print_report(0, 0, 0, 0, 0, &[]);
     }
 
     #[test]
     fn test_excellent_coverage_message_when_all_killed() {
         let results = vec![mr("a.rb", 2, 0, 2, "==", "!=", MutationOutcome::Killed)];
-        super::print_report(1, 0, 0, 1, &results);
+        super::print_report(1, 0, 0, 0, 1, &results);
     }
 
     #[test]
@@ -141,6 +177,6 @@ mod tests {
             mr("a.rb", 5, 0, 2, "==", "!=", MutationOutcome::Killed),
             mr("b.rb", 9, 0, 2, "!=", "==", MutationOutcome::Error),
         ];
-        super::print_report(1, 0, 1, 2, &results);
+        super::print_report(1, 0, 1, 0, 2, &results);
     }
 }

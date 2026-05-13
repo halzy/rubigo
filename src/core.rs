@@ -1,5 +1,6 @@
 use std::time::Instant;
 
+use crate::cache::{load_cache, save_cache, MutationId};
 use crate::mutator::MutationPoint;
 use crate::parser;
 use crate::runner::{self, TestRun};
@@ -9,6 +10,7 @@ pub enum MutationOutcome {
     Killed,   // tests ran and caught the mutation
     Survived, // tests ran but didn't catch it
     Error,    // tests could not run (infrastructure, etc.)
+    Skipped,  // previously cached as killed
 }
 
 #[derive(Debug)]
@@ -29,15 +31,21 @@ impl MutationResult {
     pub fn errored(&self) -> bool {
         matches!(self.outcome, MutationOutcome::Error)
     }
+
+    pub fn skipped(&self) -> bool {
+        matches!(self.outcome, MutationOutcome::Skipped)
+    }
 }
 
 /// Run mutation testing on a Ruby project directory.
 /// `verbosity`: 0 = default, 1 = show rspec output on failure, 2+ = always show rspec output.
+/// `cache_path`: if Some, load/save previously killed mutations to skip them.
 pub fn run_mutation_testing(
     project_path: &str,
     rspec_args: &[String],
     limit: Option<usize>,
     verbosity: u8,
+    cache_path: Option<&str>,
 ) -> anyhow::Result<Vec<MutationResult>> {
     // Step 1: Find all Ruby source files (exclude spec/, test/, vendor/ dirs)
     let rb_files: Vec<String> = walkdir::WalkDir::new(project_path)
@@ -85,6 +93,47 @@ pub fn run_mutation_testing(
         }
     }
 
+    // Step 2.5: Load cache of previously killed mutations
+    let mut results = Vec::new();
+    let cache: Option<(std::collections::HashSet<MutationId>, std::path::PathBuf)> = cache_path
+        .map(|p| {
+            let path = std::path::PathBuf::from(p);
+            let killed_set = load_cache(&path);
+            (killed_set, path)
+        });
+
+    // Separate known-killed points from the run list, add as Skipped results
+    if let Some((ref killed_set, _)) = cache {
+        let (to_run, skipped): (Vec<_>, Vec<_>) = all_points
+            .into_iter()
+            .partition(|p| !killed_set.contains(&MutationId::from_point(p)));
+
+        for pt in skipped {
+            if verbosity >= 1 {
+                println!(
+                    "SKIP {}:{}  {} -> {}  [cached as killed]",
+                    pt.file, pt.line_number, pt.original, pt.replacement,
+                );
+            }
+            results.push(MutationResult {
+                point: pt,
+                outcome: MutationOutcome::Skipped,
+            });
+        }
+        all_points = to_run;
+    }
+
+    if all_points.is_empty() {
+        println!("All {} mutations were previously killed. Nothing to test.", results.len());
+        return Ok(results);
+    }
+
+    println!(
+        "{} new mutation(s) to test, {} skipped from cache\n",
+        all_points.len(),
+        results.len()
+    );
+
     // Step 3: Run baseline test suite first to time it and ensure it works
     println!("Running baseline test suite...");
     let baseline_start = Instant::now();
@@ -113,10 +162,10 @@ pub fn run_mutation_testing(
     }
 
     // Step 4: Test each mutation one at a time
-    let mut results = Vec::new();
     let total = all_points.len();
     let mut errors = 0usize;
     let start_time = Instant::now();
+    let mut newly_killed: Vec<MutationId> = Vec::new();
 
     for (i, point) in all_points.iter().enumerate() {
         // Read, mutate, write in-place, test, restore
@@ -136,7 +185,10 @@ pub fn run_mutation_testing(
 
         let mutation_outcome = match test_run.outcome {
             runner::TestOutcome::Pass => MutationOutcome::Survived,
-            runner::TestOutcome::Fail => MutationOutcome::Killed,
+            runner::TestOutcome::Fail => {
+                newly_killed.push(MutationId::from_point(point));
+                MutationOutcome::Killed
+            }
             runner::TestOutcome::Error => {
                 errors += 1;
                 MutationOutcome::Error
@@ -154,6 +206,7 @@ pub fn run_mutation_testing(
             MutationOutcome::Killed => "KILLED",
             MutationOutcome::Survived => "SURVIVED",
             MutationOutcome::Error => "ERROR",
+            MutationOutcome::Skipped => "SKIPPED",
         };
 
         println!(
@@ -169,8 +222,10 @@ pub fn run_mutation_testing(
         );
 
         // Verbosity: show test output
-        if matches!(mutation_outcome, MutationOutcome::Survived | MutationOutcome::Error)
-            && verbosity >= 1
+        if matches!(
+            mutation_outcome,
+            MutationOutcome::Survived | MutationOutcome::Error
+        ) && verbosity >= 1
             || verbosity >= 2
         {
             println!("{}", test_run.stdout);
@@ -183,6 +238,13 @@ pub fn run_mutation_testing(
             point: point.clone(),
             outcome: mutation_outcome,
         });
+    }
+
+    // Save cache if enabled
+    if let Some((_, ref cache_path)) = cache {
+        if !newly_killed.is_empty() {
+            save_cache(cache_path, &newly_killed);
+        }
     }
 
     if errors > 0 {
@@ -226,6 +288,7 @@ mod tests {
         assert!(r.killed());
         assert!(!r.survived());
         assert!(!r.errored());
+        assert!(!r.skipped());
     }
 
     #[test]
@@ -237,6 +300,7 @@ mod tests {
         assert!(!r.killed());
         assert!(r.survived());
         assert!(!r.errored());
+        assert!(!r.skipped());
     }
 
     #[test]
@@ -248,26 +312,19 @@ mod tests {
         assert!(!r.killed());
         assert!(!r.survived());
         assert!(r.errored());
+        assert!(!r.skipped());
     }
 
     #[test]
-    fn test_mutation_outcomes_are_mutually_exclusive() {
-        let killed = MutationResult {
+    fn test_skipped_returns_true_for_skipped() {
+        let r = MutationResult {
             point: make_point("a.rb", 1, 0, 2, "==", "!="),
-            outcome: MutationOutcome::Killed,
+            outcome: MutationOutcome::Skipped,
         };
-        let survived = MutationResult {
-            point: make_point("b.rb", 1, 0, 2, "!=", "=="),
-            outcome: MutationOutcome::Survived,
-        };
-        let errored = MutationResult {
-            point: make_point("c.rb", 1, 0, 2, "==", "!="),
-            outcome: MutationOutcome::Error,
-        };
-
-        assert!(killed.killed() && !killed.survived() && !killed.errored());
-        assert!(!survived.killed() && survived.survived() && !survived.errored());
-        assert!(!errored.killed() && !errored.survived() && errored.errored());
+        assert!(!r.killed());
+        assert!(!r.survived());
+        assert!(!r.errored());
+        assert!(r.skipped());
     }
 
     #[test]
@@ -275,15 +332,15 @@ mod tests {
         assert_eq!(MutationOutcome::Killed, MutationOutcome::Killed);
         assert_eq!(MutationOutcome::Survived, MutationOutcome::Survived);
         assert_eq!(MutationOutcome::Error, MutationOutcome::Error);
+        assert_eq!(MutationOutcome::Skipped, MutationOutcome::Skipped);
         assert_ne!(MutationOutcome::Killed, MutationOutcome::Survived);
-        assert_ne!(MutationOutcome::Killed, MutationOutcome::Error);
-        assert_ne!(MutationOutcome::Survived, MutationOutcome::Error);
+        assert_ne!(MutationOutcome::Killed, MutationOutcome::Skipped);
     }
 
     #[test]
     fn test_run_mutation_testing_rejects_non_ruby_projects() {
         let dir = tempfile::tempdir().unwrap();
-        let result = run_mutation_testing(dir.path().to_str().unwrap(), &[], None, 0);
+        let result = run_mutation_testing(dir.path().to_str().unwrap(), &[], None, 0, None);
         assert!(result.is_err());
         assert!(result
             .unwrap_err()
@@ -297,6 +354,6 @@ mod tests {
         std::fs::create_dir_all(dir.path().join("spec")).unwrap();
         std::fs::create_dir_all(dir.path().join("lib")).unwrap();
         std::fs::write(dir.path().join("lib").join("foo.rb"), "# nothing\n").unwrap();
-        let _ = run_mutation_testing(dir.path().to_str().unwrap(), &[], None, 0);
+        let _ = run_mutation_testing(dir.path().to_str().unwrap(), &[], None, 0, None);
     }
 }

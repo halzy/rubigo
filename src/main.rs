@@ -19,19 +19,29 @@ struct Cli {
     /// Increase verbosity (-v: show rspec output on SURVIVED/ERROR, -vv: always show)
     #[arg(short = 'v', long = "verbose", action = clap::ArgAction::Count)]
     verbosity: u8,
+
+    /// Cache file for previously killed mutations (skip them on re-runs)
+    #[arg(long = "cache", value_name = "FILE")]
+    cache: Option<String>,
 }
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
-    let results =
-        rubigo::core::run_mutation_testing(&cli.path, &cli.rspec_args, cli.limit, cli.verbosity)?;
+    let results = rubigo::core::run_mutation_testing(
+        &cli.path,
+        &cli.rspec_args,
+        cli.limit,
+        cli.verbosity,
+        cli.cache.as_deref(),
+    )?;
 
     let killed = results.iter().filter(|r| r.killed()).count();
     let survived = results.iter().filter(|r| r.survived()).count();
     let errors = results.iter().filter(|r| r.errored()).count();
+    let skipped = results.iter().filter(|r| r.skipped()).count();
     let total = results.len();
 
-    rubigo::report::print_report(killed, survived, errors, total, &results);
+    rubigo::report::print_report(killed, survived, errors, skipped, total, &results);
 
     Ok(())
 }

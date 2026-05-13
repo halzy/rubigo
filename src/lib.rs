@@ -1,3 +1,4 @@
+pub mod cache;
 pub mod core;
 pub mod mutator;
 pub mod parser;
