@@ -3,7 +3,7 @@ use crate::core::MutationResult;
 pub fn print_report(killed: usize, survived: usize, total: usize, results: &[MutationResult]) {
     println!();
     println!("═══════════════════════════════════");
-    println!("  Ferox — Mutation Testing Report  ");
+    println!("  Rubigo — Mutation Testing Report  ");
     println!("═══════════════════════════════════");
     println!();
 

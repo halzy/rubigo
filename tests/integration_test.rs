@@ -88,7 +88,7 @@ end
 
     scaffold_ruby_project(dir.path(), "truth", source, spec);
 
-    let results = ferox::core::run_mutation_testing(dir.path().to_str().unwrap()).unwrap();
+    let results = rubigo::core::run_mutation_testing(dir.path().to_str().unwrap()).unwrap();
     assert_eq!(results.len(), 1, "should find exactly one mutation point");
     assert!(results[0].killed, "mutation should be killed when spec covers both cases");
     assert_eq!(results[0].point.original, "==");
@@ -119,7 +119,7 @@ end
 
     scaffold_ruby_project(dir.path(), "calc", source, spec);
 
-    let results = ferox::core::run_mutation_testing(dir.path().to_str().unwrap()).unwrap();
+    let results = rubigo::core::run_mutation_testing(dir.path().to_str().unwrap()).unwrap();
     assert_eq!(results.len(), 0, "no ==/!= operators → zero mutation points");
 }
 
@@ -158,7 +158,7 @@ end
 
     scaffold_ruby_project(dir.path(), "chk", source, spec);
 
-    let results = ferox::core::run_mutation_testing(dir.path().to_str().unwrap()).unwrap();
+    let results = rubigo::core::run_mutation_testing(dir.path().to_str().unwrap()).unwrap();
     assert_eq!(results.len(), 2, "should find two mutation points");
     assert!(results.iter().all(|r| r.killed), "both mutations should be killed");
 }
@@ -191,7 +191,7 @@ end
 
     scaffold_ruby_project(dir.path(), "checker", source, spec);
 
-    let results = ferox::core::run_mutation_testing(dir.path().to_str().unwrap()).unwrap();
+    let results = rubigo::core::run_mutation_testing(dir.path().to_str().unwrap()).unwrap();
     assert_eq!(results.len(), 1, "should find one != mutation point");
     assert!(results[0].killed, "!= → == mutation should be killed");
 }
