@@ -22,6 +22,10 @@ struct Cli {
     #[arg(short = 'n', long = "limit", value_name = "N")]
     limit: Option<usize>,
 
+    /// List all discovered mutation points without running tests
+    #[arg(short = 'l', long = "list")]
+    list: bool,
+
     /// Increase verbosity (-v: show on failure, -vv: show everything)
     #[arg(short = 'v', long = "verbose", action = clap::ArgAction::Count)]
     verbosity: u8,
@@ -35,6 +39,7 @@ fn main() -> anyhow::Result<()> {
         test_cmd: cli.test_cmd.as_deref(),
         cache_path: cli.cache.as_deref(),
         limit: cli.limit,
+        list_only: cli.list,
         verbosity: Verbosity::from_count(cli.verbosity),
     };
 

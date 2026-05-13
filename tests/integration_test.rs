@@ -8,6 +8,7 @@ fn make_cfg(test_dir: &tempfile::TempDir) -> Config {
         test_cmd: None,
         cache_path: None,
         limit: None,
+        list_only: false,
         verbosity: Verbosity::Quiet,
     }
 }

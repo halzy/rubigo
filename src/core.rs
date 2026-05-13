@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::time::Instant;
 
 use tree_sitter::Tree;
@@ -9,6 +10,38 @@ use crate::io::FileGuard;
 use crate::mutation::MutationPoint;
 use crate::parser;
 use crate::runner::{self, TestRun};
+
+// ── Interrupt signalling ────────────────────────────────
+
+/// 0 = no interrupt, 1 = soft stop (finish current, then stop), 2 = hard (abort now)
+static INTERRUPT_STATE: AtomicU8 = AtomicU8::new(0);
+
+/// Set once at startup. The handler is installed in run_mutation_testing.
+static HANDLER_INSTALLED: AtomicBool = AtomicBool::new(false);
+
+/// Install the Ctrl-C handler. Idempotent — safe to call multiple times.
+fn install_ctrlc_handler() {
+    if HANDLER_INSTALLED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let _ = ctrlc::set_handler(move || {
+        let old = INTERRUPT_STATE.fetch_add(1, Ordering::SeqCst);
+        if old == 0 {
+            eprintln!("\n⏸  Interrupted — finishing current mutation, then stopping...");
+            eprintln!("   (press Ctrl-C again to quit immediately)");
+        } else {
+            // second Ctrl-C: immediate exit
+            eprintln!("\n💥 Second interrupt — quitting now.");
+            std::process::exit(130);
+        }
+    });
+}
+
+fn interrupted() -> bool {
+    INTERRUPT_STATE.load(Ordering::SeqCst) >= 1
+}
+
+// ── Data types ──────────────────────────────────────────
 
 #[derive(Debug, PartialEq)]
 pub enum MutationOutcome {
@@ -44,8 +77,13 @@ struct FileTree {
     tree: Tree,
 }
 
+// ── Main entry point ────────────────────────────────────
+
 /// Run mutation testing on a Ruby project using the given config.
 pub fn run_mutation_testing(cfg: &Config) -> anyhow::Result<Vec<MutationResult>> {
+    install_ctrlc_handler();
+    INTERRUPT_STATE.store(0, Ordering::SeqCst);
+
     let project_path = cfg.project_path;
 
     // Step 1: Find Ruby source files
@@ -98,7 +136,19 @@ pub fn run_mutation_testing(cfg: &Config) -> anyhow::Result<Vec<MutationResult>>
         }
     }
 
-    // Step 2.5: Cache
+    // Step 2.5: List-only mode — print and exit before mutating anything
+    if cfg.list_only {
+        for point in &all_points {
+            println!(
+                "{}:{}  {} -> {}  [{}]",
+                point.file, point.line_number, point.original, point.replacement, point.operator_name,
+            );
+        }
+        println!("\n{} mutation point(s) found.", all_points.len());
+        return Ok(vec![]);
+    }
+
+    // Step 2.6: Cache
     let mut results = Vec::new();
     let cache: Option<(std::collections::HashSet<MutationId>, std::path::PathBuf)> =
         cfg.cache_path.map(|p| {
@@ -113,7 +163,7 @@ pub fn run_mutation_testing(cfg: &Config) -> anyhow::Result<Vec<MutationResult>>
             .partition(|p| !killed_set.contains(&MutationId::from_point(p)));
 
         for pt in skipped {
-            if cfg.verbosity.show_on_failure() {
+            if cfg.verbosity.show_detail() {
                 println!(
                     "SKIP {}:{}  {} -> {}  [cached as killed]",
                     pt.file, pt.line_number, pt.original, pt.replacement,
@@ -214,7 +264,7 @@ pub fn run_mutation_testing(cfg: &Config) -> anyhow::Result<Vec<MutationResult>>
         };
 
         println!(
-            "[{}/{}] {}:{}  {} -> {}  [{}]  est. remaining: ~{:?}",
+            "[{}/{}] {}:{}  {} -> {}  [{} / {}]  est. remaining: ~{:?}",
             done,
             total,
             point.file,
@@ -222,12 +272,13 @@ pub fn run_mutation_testing(cfg: &Config) -> anyhow::Result<Vec<MutationResult>>
             point.original,
             point.replacement,
             outcome_str,
+            point.operator_name,
             eta,
         );
 
         let show = mutation_outcome == MutationOutcome::Survived
             || mutation_outcome == MutationOutcome::Error;
-        if (show && cfg.verbosity.show_on_failure()) || cfg.verbosity.show_always() {
+        if (show && cfg.verbosity.show_detail()) || cfg.verbosity.show_always() {
             println!("{}", test_run.stdout);
             if !test_run.stderr.is_empty() {
                 eprintln!("{}", test_run.stderr);
@@ -238,12 +289,20 @@ pub fn run_mutation_testing(cfg: &Config) -> anyhow::Result<Vec<MutationResult>>
             point: point.clone(),
             outcome: mutation_outcome,
         });
+
+        // Check interrupt AFTER file is restored
+        if interrupted() {
+            println!("\n🛑 Stopped after {}/{} mutations (user interrupted)", done, total);
+            break;
+        }
     }
 
     // Save cache once at the end (batched)
     if let Some((_, ref cache_path)) = cache {
         if !newly_killed.is_empty() {
-            save_cache(cache_path, &newly_killed);
+            if let Err(e) = save_cache(cache_path, &newly_killed) {
+                eprintln!("Warning: could not save cache: {}", e);
+            }
         }
     }
 
@@ -258,18 +317,28 @@ pub fn run_mutation_testing(cfg: &Config) -> anyhow::Result<Vec<MutationResult>>
     Ok(results)
 }
 
+// ── Tests ───────────────────────────────────────────────
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::Verbosity;
+    use std::sync::atomic::Ordering;
 
-    fn make_point(file: &str, line: usize, node_id: usize, original: &str, replacement: &str) -> MutationPoint {
+    fn make_point(
+        file: &str,
+        line: usize,
+        node_id: usize,
+        original: &str,
+        replacement: &str,
+    ) -> MutationPoint {
         MutationPoint {
             file: file.to_string(),
             line_number: line,
             node_id,
             original: original.to_string(),
             replacement: replacement.to_string(),
+            operator_name: "flip_equality".to_string(),
         }
     }
 
@@ -314,6 +383,28 @@ mod tests {
     }
 
     #[test]
+    fn test_interrupt_state_defaults_to_zero() {
+        // Reset from any prior test that set it
+        INTERRUPT_STATE.store(0, Ordering::SeqCst);
+        assert!(!interrupted());
+        assert_eq!(INTERRUPT_STATE.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn test_interrupt_detected_after_set() {
+        INTERRUPT_STATE.store(0, Ordering::SeqCst);
+        assert!(!interrupted());
+        INTERRUPT_STATE.store(1, Ordering::SeqCst);
+        assert!(interrupted());
+        INTERRUPT_STATE.store(2, Ordering::SeqCst);
+        assert!(interrupted());
+        // Clean up
+        INTERRUPT_STATE.store(0, Ordering::SeqCst);
+    }
+
+    // ── Integration-level tests ─────────────────────────
+
+    #[test]
     fn test_rejects_non_ruby() {
         let dir = tempfile::tempdir().unwrap();
         let cfg = Config {
@@ -321,11 +412,15 @@ mod tests {
             test_cmd: None,
             cache_path: None,
             limit: None,
+            list_only: false,
             verbosity: Verbosity::Quiet,
         };
         let result = run_mutation_testing(&cfg);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("No .rb source files"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("No .rb source files"));
     }
 
     #[test]
@@ -339,6 +434,7 @@ mod tests {
             test_cmd: None,
             cache_path: None,
             limit: None,
+            list_only: false,
             verbosity: Verbosity::Quiet,
         };
         let _ = run_mutation_testing(&cfg);
@@ -352,12 +448,14 @@ mod tests {
         std::fs::write(
             dir.path().join("lib").join("foo.rb"),
             "class Foo\n  def bar(a, b)\n    a == b\n  end\nend\n",
-        ).unwrap();
+        )
+        .unwrap();
         let cfg = Config {
             project_path: dir.path().to_str().unwrap(),
             test_cmd: None,
             cache_path: None,
             limit: Some(0),
+            list_only: false,
             verbosity: Verbosity::Quiet,
         };
         let _ = run_mutation_testing(&cfg);
@@ -375,17 +473,23 @@ mod tests {
         crate::cache::save_cache(
             &cache_path,
             &[MutationId {
-                file: dir.path().join("lib/foo.rb").to_string_lossy().to_string(),
+                file: dir
+                    .path()
+                    .join("lib/foo.rb")
+                    .to_string_lossy()
+                    .to_string(),
                 line_number: 3,
                 original: "==".to_string(),
             }],
-        );
+        )
+        .unwrap();
 
         let cfg = Config {
             project_path: dir.path().to_str().unwrap(),
             test_cmd: None,
             cache_path: Some(cache_path.to_str().unwrap()),
             limit: None,
+            list_only: false,
             verbosity: Verbosity::Quiet,
         };
         let results = run_mutation_testing(&cfg).unwrap();

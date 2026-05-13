@@ -30,8 +30,17 @@ impl FileGuard {
             None => "rubigo-tmp".to_string(),
         });
 
-        // 1. Write new content to tempfile
-        std::fs::write(&tmp, content)?;
+        // 1. Write new content to tempfile and fsync to disk
+        {
+            let f = std::fs::File::create(&tmp)?;
+            use std::io::Write;
+            let mut f = std::io::BufWriter::new(f);
+            f.write_all(content.as_bytes())?;
+            f.flush()?;
+            f.into_inner().map_err(|_| {
+                std::io::Error::new(std::io::ErrorKind::Other, "BufWriter flush failed")
+            })?.sync_all()?;
+        }
 
         // 2. Rename original → backup (atomic on same filesystem)
         std::fs::rename(path, &bak)?;

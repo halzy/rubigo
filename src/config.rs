@@ -3,9 +3,9 @@
 pub enum Verbosity {
     /// Only progress lines.
     Quiet,
-    /// Show test output on SURVIVED and ERROR mutations.
+    /// Show extra detail: skip messages, test output on SURVIVED and ERROR.
     Normal,
-    /// Show test output for every mutation plus baseline output.
+    /// Show all detail including baseline and every mutation's test output.
     Debug,
 }
 
@@ -18,7 +18,7 @@ impl Verbosity {
         }
     }
 
-    pub fn show_on_failure(self) -> bool {
+    pub fn show_detail(self) -> bool {
         matches!(self, Verbosity::Normal | Verbosity::Debug)
     }
 
@@ -37,6 +37,8 @@ pub struct Config<'a> {
     pub cache_path: Option<&'a str>,
     /// Optional limit on the number of mutations to test.
     pub limit: Option<usize>,
+    /// Whether to only list mutation points without running tests.
+    pub list_only: bool,
     /// How verbose the output should be.
     pub verbosity: Verbosity,
 }

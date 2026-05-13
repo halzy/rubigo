@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use std::io;
 use std::path::Path;
 
 /// A unique identity for a mutation: file + line + original operator.
@@ -31,14 +32,14 @@ pub fn load_cache(path: &Path) -> HashSet<MutationId> {
 
 /// Save newly killed mutation IDs to the cache file.
 /// Appends to existing entries (loads, merges, writes back).
-pub fn save_cache(path: &Path, killed: &[MutationId]) {
+pub fn save_cache(path: &Path, killed: &[MutationId]) -> io::Result<()> {
     let mut existing = load_cache(path);
     for id in killed {
         existing.insert(id.clone());
     }
     let contents = serde_json::to_string_pretty(&Vec::from_iter(existing.into_iter()))
         .unwrap_or_else(|_| "[]".into());
-    let _ = std::fs::write(path, contents);
+    std::fs::write(path, contents)
 }
 
 #[cfg(test)]
@@ -77,7 +78,7 @@ mod tests {
             id("a.rb", 3, "=="),
             id("b.rb", 7, "!="),
         ];
-        save_cache(&path, &killed);
+        save_cache(&path, &killed).unwrap();
 
         let loaded = load_cache(&path);
         assert_eq!(loaded.len(), 2);
@@ -91,9 +92,9 @@ mod tests {
         let path = dir.path().join("cache.json");
 
         // First save
-        save_cache(&path, &[id("a.rb", 1, "==")]);
+        save_cache(&path, &[id("a.rb", 1, "==")]).unwrap();
         // Second save should append
-        save_cache(&path, &[id("b.rb", 2, "!=")]);
+        save_cache(&path, &[id("b.rb", 2, "!=")]).unwrap();
 
         let loaded = load_cache(&path);
         assert_eq!(loaded.len(), 2);
@@ -107,8 +108,8 @@ mod tests {
         let path = dir.path().join("cache.json");
 
         // Save the same id twice
-        save_cache(&path, &[id("a.rb", 1, "==")]);
-        save_cache(&path, &[id("a.rb", 1, "==")]);
+        save_cache(&path, &[id("a.rb", 1, "==")]).unwrap();
+        save_cache(&path, &[id("a.rb", 1, "==")]).unwrap();
 
         let loaded = load_cache(&path);
         assert_eq!(loaded.len(), 1);

@@ -89,6 +89,7 @@ mod tests {
             node_id: 0,
             original: orig.to_string(),
             replacement: repl.to_string(),
+            operator_name: "flip_equality".to_string(),
         }
     }
 

@@ -6,6 +6,8 @@ pub struct MutationPoint {
     pub node_id: usize,
     pub original: String,
     pub replacement: String,
+    /// Which operator category produced this mutation (e.g., "flip_equality").
+    pub operator_name: String,
 }
 
 /// Convert a byte offset to a 1-indexed line number by counting newlines.

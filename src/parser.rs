@@ -16,23 +16,18 @@ pub fn parse_source(source: &str) -> anyhow::Result<Tree> {
 pub fn find_mutations(tree: &Tree, source: &str, file: &str) -> Vec<MutationPoint> {
     let registry = OperatorRegistry::default_operators();
     let mut points = Vec::new();
-    walk(node_ref(tree.root_node()), source, file, &registry, &mut points);
+    walk(tree.root_node(), source, file, &registry, None, &mut points);
     points
 }
 
-fn walk(node: Node, source: &str, file: &str, reg: &OperatorRegistry, points: &mut Vec<MutationPoint>) {
-    points.extend(reg.try_mutate(&node, source, file));
+fn walk(node: Node, source: &str, file: &str, reg: &OperatorRegistry, parent_kind: Option<&str>, points: &mut Vec<MutationPoint>) {
+    let kind_str = node.kind().to_string();
+    points.extend(reg.try_mutate(&node, source, file, parent_kind));
     for i in 0..node.child_count() {
         if let Some(child) = node.child(i as u32) {
-            walk(child, source, file, reg, points);
+            walk(child, source, file, reg, Some(&kind_str), points);
         }
     }
-}
-
-// tree-sitter 0.26 requires `Node<'_>` lifetime, but our walk function
-// uses owned `Node` values. This helper bridges the gap.
-fn node_ref(node: Node) -> Node {
-    node
 }
 
 #[cfg(test)]
