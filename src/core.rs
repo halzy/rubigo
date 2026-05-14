@@ -283,33 +283,41 @@ pub fn run_mutation_testing(cfg: &Config) -> anyhow::Result<Vec<MutationResult>>
         results.len()
     );
 
-    // Step 3: Baseline
-    println!("Running baseline test suite...");
-    let baseline_start = Instant::now();
-    let baseline = runner::run_tests(&project_root, cfg.test_cmd, None)?;
-    let baseline_duration = baseline_start.elapsed();
+    // Step 3: Baseline, unless user is using {spec_file} template — in that case
+    // the baseline would run a different test suite than each mutation (full vs.
+    // targeted), so it's neither comparable nor useful.
+    let uses_targeted_spec = cfg.test_cmd.map_or(false, |cmd| cmd.contains("{spec_file}"));
 
-    if cfg.verbosity.show_always() {
-        println!("--- baseline output ---");
-        print!("{}", baseline.stdout);
-        if !baseline.stderr.is_empty() {
-            eprint!("{}", baseline.stderr);
-        }
-        println!("--- end baseline ---\n");
-    }
-
-    if baseline.outcome == runner::TestOutcome::Error {
-        eprintln!(
-            "WARNING: Baseline test suite could not run — all mutations will report as errors.\n"
-        );
+    if uses_targeted_spec {
+        println!("Skipping baseline (targeted spec mode — each mutation runs its own spec)\n");
     } else {
-        let total_est = baseline_duration * all_points.len() as u32;
-        println!(
-            "Baseline: {:?} per run ~ est. total: ~{:?} for {} mutations\n",
-            baseline_duration,
-            total_est,
-            all_points.len()
-        );
+        println!("Running baseline test suite...");
+        let baseline_start = Instant::now();
+        let baseline = runner::run_tests(&project_root, cfg.test_cmd, None)?;
+        let baseline_duration = baseline_start.elapsed();
+
+        if cfg.verbosity.show_always() {
+            println!("--- baseline output ---");
+            print!("{}", baseline.stdout);
+            if !baseline.stderr.is_empty() {
+                eprint!("{}", baseline.stderr);
+            }
+            println!("--- end baseline ---\n");
+        }
+
+        if baseline.outcome == runner::TestOutcome::Error {
+            eprintln!(
+                "WARNING: Baseline test suite could not run — all mutations will report as errors.\n"
+            );
+        } else {
+            let total_est = baseline_duration * all_points.len() as u32;
+            println!(
+                "Baseline: {:?} per run ~ est. total: ~{:?} for {} mutations\n",
+                baseline_duration,
+                total_est,
+                all_points.len()
+            );
+        }
     }
 
     // Step 4: Test each mutation
