@@ -110,24 +110,41 @@ struct FileTree {
 /// When `path` is a file, walk up to find the project root (directory containing
 /// Gemfile, .git, or spec/). Returns the original path unchanged if it's already
 /// a directory or no project root is found.
-fn find_project_root(path: &str) -> &str {
+///
+/// Relative paths are resolved against the current working directory so
+/// parent-walk works correctly from any directory. Symlinks are NOT followed
+/// (unlike canonicalize) so prefix matching against WalkDir output stays consistent.
+fn find_project_root(path: &str) -> String {
     let p = std::path::Path::new(path);
-    if p.is_dir() {
-        return path;
+
+    // Resolve relative paths against CWD (no symlink following).
+    let resolved = if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .unwrap_or_else(|_| std::path::PathBuf::from("."))
+            .join(p)
+    };
+
+    if resolved.is_dir() {
+        return resolved.to_string_lossy().to_string();
     }
-    let mut current = p.parent();
+
+    let mut current = resolved.parent();
     while let Some(dir) = current {
         if dir.join("Gemfile").exists()
             || dir.join("spec").is_dir()
             || dir.join(".git").exists()
         {
-            // Return as &str — the parent is a prefix of the original path, so the
-            // borrow is valid.
-            return dir.to_str().unwrap_or(path);
+            return dir.to_string_lossy().to_string();
         }
         current = dir.parent();
     }
-    path // fallback: use as-is
+    // Fallback: use the parent directory of the resolved path, or the original.
+    resolved
+        .parent()
+        .map(|d| d.to_string_lossy().to_string())
+        .unwrap_or_else(|| path.to_string())
 }
 
 /// Run mutation testing on a Ruby project using the given config.
@@ -269,7 +286,7 @@ pub fn run_mutation_testing(cfg: &Config) -> anyhow::Result<Vec<MutationResult>>
     // Step 3: Baseline
     println!("Running baseline test suite...");
     let baseline_start = Instant::now();
-    let baseline = runner::run_tests(project_root, cfg.test_cmd, None)?;
+    let baseline = runner::run_tests(&project_root, cfg.test_cmd, None)?;
     let baseline_duration = baseline_start.elapsed();
 
     if cfg.verbosity.show_always() {
@@ -306,10 +323,10 @@ pub fn run_mutation_testing(cfg: &Config) -> anyhow::Result<Vec<MutationResult>>
 
         let mut guard = FileGuard::overwrite(std::path::Path::new(&point.file), &mutated)?;
 
-        let spec_file = runner::derive_spec_file(&point.file, project_root);
+        let spec_file = runner::derive_spec_file(&point.file, &project_root);
         let spec_file_str = spec_file.as_deref();
         let test_run =
-            runner::run_tests(project_root, cfg.test_cmd, spec_file_str).unwrap_or_else(|_| TestRun {
+            runner::run_tests(&project_root, cfg.test_cmd, spec_file_str).unwrap_or_else(|_| TestRun {
                 outcome: runner::TestOutcome::Error,
                 stdout: String::new(),
                 stderr: "run_tests failed".into(),
