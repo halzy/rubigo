@@ -57,16 +57,26 @@ impl FileGuard {
     /// Restore the original file and clean up the backup.
     pub fn restore(&mut self) -> io::Result<()> {
         if let Some(ref bak) = self.backup.take() {
-            if bak.exists() {
-                // If a tempfile is hanging around from a previous crash, remove it
-                let tmp = self.path.with_extension(match self.path.extension() {
-                    Some(ext) => format!("{}.rubigo-tmp", ext.to_string_lossy()),
-                    None => "rubigo-tmp".to_string(),
-                });
-                let _ = std::fs::remove_file(&tmp);
+            // Clean up any stale tempfile from a prior crash
+            let tmp = self.path.with_extension(match self.path.extension() {
+                Some(ext) => format!("{}.rubigo-tmp", ext.to_string_lossy()),
+                None => "rubigo-tmp".to_string(),
+            });
+            let _ = std::fs::remove_file(&tmp);
 
-                std::fs::rename(bak, &self.path)?;
+            if !bak.exists() {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!(
+                        "Backup file missing — {} may be left in mutated state. \
+                         Recover from git: `git checkout -- {}`",
+                        bak.display(),
+                        self.path.display(),
+                    ),
+                ));
             }
+
+            std::fs::rename(bak, &self.path)?;
         }
         Ok(())
     }

@@ -341,7 +341,51 @@ pub fn run_mutation_testing(cfg: &Config) -> anyhow::Result<Vec<MutationResult>>
                 exit_code: None,
             });
 
-        guard.restore()?;
+        // Restore the original file and verify it actually happened.
+        // In Rails apps with Spring/Bootsnap, the test process may hold a
+        // cached copy of the mutated file and write it back after we rename.
+        if let Err(e) = guard.restore() {
+            eprintln!(
+                "WARNING: Failed to restore {} after mutation: {}. \
+                 File may be left in mutated state.",
+                point.file, e
+            );
+        } else {
+            // Verify: read back the file and check it matches the original source.
+            // If it doesn't, Spring or a test hook has written back the mutated
+            // version after our restore — force-write the original content.
+            match std::fs::read_to_string(&point.file) {
+                Ok(current) if current == ft.source => {
+                    // Restore confirmed — file matches original.
+                }
+                Ok(current) => {
+                    let lines_match = current.lines().count() == ft.source.lines().count();
+                    eprintln!(
+                        "WARNING: {} was overwritten after restore ({} lines, {} → {} len). \
+                         Re-writing original content.",
+                        point.file,
+                        if lines_match { "same" } else { "different" },
+                        ft.source.len(),
+                        current.len(),
+                    );
+                    if let Err(e) = std::fs::write(&point.file, &ft.source) {
+                        eprintln!(
+                            "CRITICAL: Could not repair {} — file is left in mutated state: {}",
+                            point.file, e
+                        );
+                    } else {
+                        eprintln!("  Repaired successfully.");
+                    }
+                }
+                Err(e) => {
+                    eprintln!(
+                        "WARNING: Could not verify restore of {}: {}. \
+                         File may be left in mutated state.",
+                        point.file, e
+                    );
+                }
+            }
+        }
 
         let mutation_outcome = match test_run.outcome {
             runner::TestOutcome::Pass => MutationOutcome::Survived,
