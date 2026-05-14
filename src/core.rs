@@ -1,6 +1,7 @@
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::time::Instant;
 
+use colored::Colorize;
 use tree_sitter::Tree;
 
 use crate::cache::{load_cache, save_cache, MutationId};
@@ -325,6 +326,9 @@ pub fn run_mutation_testing(cfg: &Config) -> anyhow::Result<Vec<MutationResult>>
     let start_time = Instant::now();
     let mut newly_killed: Vec<MutationId> = Vec::new();
 
+    let warn_label = "WARNING:".yellow().bold();
+    let crit_label = "CRITICAL:".red().bold();
+
     for (i, point) in all_points.iter().enumerate() {
         let ft = &file_trees[&point.file];
         let mutated = emit::emit_tree(&ft.tree, &ft.source, point.node_id, &point.replacement);
@@ -333,8 +337,8 @@ pub fn run_mutation_testing(cfg: &Config) -> anyhow::Result<Vec<MutationResult>>
 
         let spec_file = runner::derive_spec_file(&point.file, &project_root);
         let spec_file_str = spec_file.as_deref();
-        let test_run =
-            runner::run_tests(&project_root, cfg.test_cmd, spec_file_str).unwrap_or_else(|_| TestRun {
+        let test_run = runner::run_tests(&project_root, cfg.test_cmd, spec_file_str)
+            .unwrap_or_else(|_| TestRun {
                 outcome: runner::TestOutcome::Error,
                 stdout: String::new(),
                 stderr: "run_tests failed".into(),
@@ -346,9 +350,11 @@ pub fn run_mutation_testing(cfg: &Config) -> anyhow::Result<Vec<MutationResult>>
         // cached copy of the mutated file and write it back after we rename.
         if let Err(e) = guard.restore() {
             eprintln!(
-                "WARNING: Failed to restore {} after mutation: {}. \
+                "{} Failed to restore {} after mutation: {}. \
                  File may be left in mutated state.",
-                point.file, e
+                warn_label,
+                point.file.dimmed(),
+                e,
             );
         } else {
             // Verify: read back the file and check it matches the original source.
@@ -361,17 +367,20 @@ pub fn run_mutation_testing(cfg: &Config) -> anyhow::Result<Vec<MutationResult>>
                 Ok(current) => {
                     let lines_match = current.lines().count() == ft.source.lines().count();
                     eprintln!(
-                        "WARNING: {} was overwritten after restore ({} lines, {} → {} len). \
+                        "{} {} was overwritten after restore ({} lines, {} → {} len). \
                          Re-writing original content.",
-                        point.file,
+                        warn_label,
+                        point.file.dimmed(),
                         if lines_match { "same" } else { "different" },
                         ft.source.len(),
                         current.len(),
                     );
                     if let Err(e) = std::fs::write(&point.file, &ft.source) {
                         eprintln!(
-                            "CRITICAL: Could not repair {} — file is left in mutated state: {}",
-                            point.file, e
+                            "{} Could not repair {} — file is left in mutated state: {}",
+                            crit_label,
+                            point.file.dimmed(),
+                            e,
                         );
                     } else {
                         eprintln!("  Repaired successfully.");
@@ -379,9 +388,11 @@ pub fn run_mutation_testing(cfg: &Config) -> anyhow::Result<Vec<MutationResult>>
                 }
                 Err(e) => {
                     eprintln!(
-                        "WARNING: Could not verify restore of {}: {}. \
+                        "{} Could not verify restore of {}: {}. \
                          File may be left in mutated state.",
-                        point.file, e
+                        warn_label,
+                        point.file.dimmed(),
+                        e,
                     );
                 }
             }
@@ -402,11 +413,11 @@ pub fn run_mutation_testing(cfg: &Config) -> anyhow::Result<Vec<MutationResult>>
         let avg_per = elapsed / done as u32;
         let eta = avg_per * remaining as u32;
 
-        let outcome_str = match mutation_outcome {
-            MutationOutcome::Killed => "KILLED",
-            MutationOutcome::Survived => "SURVIVED",
-            MutationOutcome::Error => "ERROR",
-            MutationOutcome::Skipped => "SKIPPED",
+        let (outcome_str, outcome_color) = match mutation_outcome {
+            MutationOutcome::Killed => ("KILLED", "green"),
+            MutationOutcome::Survived => ("SURVIVED", "red"),
+            MutationOutcome::Error => ("ERROR", "yellow"),
+            MutationOutcome::Skipped => ("SKIPPED", "dimmed"),
         };
 
         println!(
@@ -417,7 +428,7 @@ pub fn run_mutation_testing(cfg: &Config) -> anyhow::Result<Vec<MutationResult>>
             point.line_number,
             point.original,
             point.replacement,
-            outcome_str,
+            outcome_str.color(outcome_color).bold(),
             point.operator_name,
             eta,
         );
@@ -425,7 +436,10 @@ pub fn run_mutation_testing(cfg: &Config) -> anyhow::Result<Vec<MutationResult>>
         let show = mutation_outcome == MutationOutcome::Survived
             || mutation_outcome == MutationOutcome::Error;
         if (show && cfg.verbosity.show_detail()) || cfg.verbosity.show_always() {
-            println!("{}", test_run.stdout);
+            // Test output left uncolored — creates visual contrast with rubigo framing
+            if !test_run.stdout.is_empty() {
+                println!("{}", test_run.stdout);
+            }
             if !test_run.stderr.is_empty() {
                 eprintln!("{}", test_run.stderr);
             }
