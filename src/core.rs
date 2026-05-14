@@ -420,17 +420,17 @@ pub fn run_mutation_testing(cfg: &Config) -> anyhow::Result<Vec<MutationResult>>
             MutationOutcome::Skipped => ("SKIPPED", "dimmed"),
         };
 
+        // Colored progress line: framing dimmed, mutation signal white, outcome bracket bold + colored
         println!(
-            "[{}/{}] {}:{}  {} -> {}  [{} / {}]  est. remaining: ~{:?}",
-            done,
-            total,
-            point.file,
-            point.line_number,
+            "[{}/{}] {}:{}  {} -> {}  {}  est. remaining: ~{:?}",
+            done.to_string().dimmed(),
+            total.to_string().dimmed(),
+            point.file.dimmed(),
+            point.line_number.to_string().dimmed(),
             point.original,
             point.replacement,
-            outcome_str.color(outcome_color).bold(),
-            point.operator_name,
-            eta,
+            format!("[{} / {}]", outcome_str, point.operator_name).color(outcome_color).bold(),
+            format!("{:?}", eta).dimmed(),
         );
 
         let show = mutation_outcome == MutationOutcome::Survived
