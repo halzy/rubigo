@@ -420,12 +420,11 @@ pub fn run_mutation_testing(cfg: &Config) -> anyhow::Result<Vec<MutationResult>>
             MutationOutcome::Skipped => ("SKIPPED", "dimmed"),
         };
 
-        // Colored progress line: framing dimmed, path and mutation signal white, outcome bracket bold + colored
+        // Colored progress line: counter and path bright white, mutation white, outcome bold+colored
         println!(
-            "[{}/{}] {}:{}  {} -> {}  {}  est. remaining: ~{:?}",
-            done,
-            total,
-            point.file,
+            "{} {}:{}  {} -> {}  {}  est. remaining: ~{:?}",
+            format!("[{}/{}]", done, total).white().bold(),
+            point.file.white().bold(),
             point.line_number.to_string().dimmed(),
             point.original,
             point.replacement,
